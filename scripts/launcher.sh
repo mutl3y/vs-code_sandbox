@@ -552,6 +552,7 @@ ssl_create_session() {
     podman run -d \
         --name "${container_name}" \
         --network=host \
+        --userns=keep-id \
         -e SSL_PORT="${ssl_port}" \
         -e VSCODE_PORT="${vs_port}" \
         -e WORKSPACE_DIR="/workspace" \
