@@ -70,11 +70,10 @@ coverage/
 local.mk
 local-compose.yml
 
-
-do_not_use
 ca/ca-key.pem
 ca/server.key
 ca/server.crt
+ca/ca-cert.pem
 ca/*.srl
 ca/*.csr
 links/
