@@ -16,6 +16,15 @@ LABEL maintainer="Mutl3y"
 
 ARG PYTHON_VERSION=3.11
 
+# Match the vscode user uid/gid to the host user running the build
+# Avoids permission issues on bind-mounted workspaces
+ARG USER_UID=1000
+ARG USER_GID=1000
+RUN if [ "${USER_UID}" != "1000" ] || [ "${USER_GID}" != "1000" ]; then \
+        groupmod -g "${USER_GID}" vscode && \
+        usermod -u "${USER_UID}" -g "${USER_GID}" vscode; \
+    fi
+
 # ============================================================================
 # System Dependencies
 # ============================================================================

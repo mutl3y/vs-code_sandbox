@@ -100,8 +100,17 @@ build_image() {
         return
     fi
 
-    print_info "Building image... (this may take 5-10 minutes)"
-    $COMPOSE_CMD -f "$COMPOSE_FILE" build
+    local user_uid
+    local user_gid
+    user_uid=$(id -u)
+    user_gid=$(id -g)
+    print_info "Building image with USER_UID=${user_uid} USER_GID=${user_gid}..."
+    $CONTAINER_CMD build \
+        --build-arg USER_UID="${user_uid}" \
+        --build-arg USER_GID="${user_gid}" \
+        -f "${PROJECT_DIR}/Dockerfile" \
+        -t vscode-agent:latest \
+        "${PROJECT_DIR}"
 
     print_success "Image built successfully"
 }
@@ -488,8 +497,13 @@ ssl_build_image() {
         print_success "Image already exists (vscode-agent:ssl)"
         return
     fi
+    # Ensure base image exists first
+    if ! $CONTAINER_CMD image inspect vscode-agent:latest &>/dev/null; then
+        print_info "Base image not found — building vscode-agent:latest first..."
+        build_image
+    fi
     print_info "Building vscode-agent:ssl (layers on vscode-agent:latest)..."
-    podman build -f "${PROJECT_DIR}/Dockerfile.ssl" -t vscode-agent:ssl "${PROJECT_DIR}"
+    $CONTAINER_CMD build -f "${PROJECT_DIR}/Dockerfile.ssl" -t vscode-agent:ssl "${PROJECT_DIR}"
     print_success "Image built: vscode-agent:ssl"
 }
 
