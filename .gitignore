@@ -1,0 +1,80 @@
+# .gitignore - VS Code Container Project
+
+# Docker
+docker-compose.override.yml
+.dockerignore.local
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Volumes and caches (host-side)
+workspace-*/.git/objects/*
+workspace-*/.git/logs/*
+worktrees-*/.git/*
+.npm-cache/
+node_modules/
+
+# VS Code
+.vscode/
+*.code-workspace
+.history/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+*.o
+*.a
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.Python
+
+# Docker images and containers (listed for reference, not gitignored)
+# docker-images/
+# docker-containers/
+
+# Documentation build outputs
+docs/_build/
+docs/.doctrees/
+
+# Test coverage
+coverage/
+.coverage
+
+# Local development overrides
+local.mk
+local-compose.yml
+
+
+do_not_use
+ca/ca-key.pem
+ca/server.key
+ca/server.crt
+ca/*.srl
+ca/*.csr
+links/

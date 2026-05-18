@@ -1,0 +1,106 @@
+version: '3.9'
+
+services:
+  vscode-session-1:
+    image: vscode-agent:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: vscode-session-1
+
+    volumes:
+      # VS Code Server tunnel config (GitHub auth state)
+      - vscode-session-1-tunnel-config:/home/vscode/.config
+      # Agent cache
+      - vscode-session-1-cache:/home/vscode/.agent-cache
+      # Workspace and worktrees
+      - ${WORKSPACE_PATH_SESSION_1}:/workspace:rw
+      - ${WORKTREES_PATH_SESSION_1}:/worktrees:rw
+
+    environment:
+      AGENT_SESSION_ID: "session-1"
+      WORKSPACE_DIR: "/workspace"
+      WORKTREES_DIR: "/worktrees"
+      HOSTNAME: "vscode-session-1"
+      NODE_ENV: production
+      PYTHONUNBUFFERED: "1"
+      CONTAINER_RUNTIME: "${CONTAINER_RUNTIME:-podman}"
+      CONTAINER_SOCKET: "${CONTAINER_SOCKET:-/run/podman/podman.sock}"
+
+    stdin_open: true
+    tty: true
+
+    network_mode: host
+
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 4G
+        reservations:
+          cpus: "2"
+          memory: 2G
+
+    restart_policy:
+      condition: on-failure
+      delay: 5s
+      max_attempts: 3
+
+  vscode-session-2:
+    image: vscode-agent:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: vscode-session-2
+
+    volumes:
+      # VS Code Server tunnel config (GitHub auth state)
+      - vscode-session-2-tunnel-config:/home/vscode/.config
+      # Agent cache
+      - vscode-session-2-cache:/home/vscode/.agent-cache
+      # Workspace and worktrees
+      - ${WORKSPACE_PATH_SESSION_2}:/workspace:rw
+      - ${WORKTREES_PATH_SESSION_2}:/worktrees:rw
+
+    environment:
+      AGENT_SESSION_ID: "session-2"
+      WORKSPACE_DIR: "/workspace"
+      WORKTREES_DIR: "/worktrees"
+      HOSTNAME: "vscode-session-2"
+      NODE_ENV: production
+      PYTHONUNBUFFERED: "1"
+      CONTAINER_RUNTIME: "${CONTAINER_RUNTIME:-podman}"
+      CONTAINER_SOCKET: "${CONTAINER_SOCKET:-/run/podman/podman.sock}"
+
+    stdin_open: true
+    tty: true
+
+    network_mode: host
+
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 4G
+        reservations:
+          cpus: "2"
+          memory: 2G
+
+    restart_policy:
+      condition: on-failure
+      delay: 5s
+      max_attempts: 3
+
+volumes:
+  vscode-session-1-tunnel-config:
+    driver: local
+  vscode-session-1-cache:
+    driver: local
+  vscode-session-2-tunnel-config:
+    driver: local
+  vscode-session-2-cache:
+    driver: local
+
+

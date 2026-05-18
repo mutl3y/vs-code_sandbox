@@ -1,0 +1,121 @@
+# ============================================================================
+# Dockerfile.ssl: VS Code Server with HTTPS + connection-token auth
+# ============================================================================
+# Extends the working HTTP image (vscode-agent:latest) with:
+# ├─ nginx TLS termination on port 8444 (CA-signed cert, bind-mounted)
+# ├─ VS Code Server bound to 127.0.0.1:8443 (loopback only)
+# ├─ connection-token authentication (token in URL)
+# └─ WebSocket headers correctly forwarded
+# ============================================================================
+
+FROM vscode-agent:latest
+
+LABEL description="VS Code Server - HTTPS via nginx (CA-signed cert, token auth)"
+LABEL maintainer="Mutl3y"
+
+USER root
+
+# nginx for TLS termination
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nginx \
+    && rm -rf /var/lib/apt/lists/*
+
+# Disable default nginx site; SSL cert dir created at runtime from bind-mounts
+RUN rm -f /etc/nginx/sites-enabled/default
+
+# Startup supervisor: writes connection token, generates nginx config, starts services
+# Env vars (all optional, have defaults):
+#   SSL_PORT             nginx HTTPS listen port  (default 8444)
+#   VSCODE_PORT          VS Code internal port    (default 8443)
+#   WORKSPACE_DIR        workspace path           (default /workspace)
+#   VSCODE_CONNECTION_TOKEN  pre-set token        (default: auto-generated)
+COPY <<'STARTUP_SSL' /opt/init/startup-ssl.sh
+#!/bin/bash
+set -euo pipefail
+
+SSL_PORT="${SSL_PORT:-8444}"
+VSCODE_PORT="${VSCODE_PORT:-8443}"
+WORKSPACE_DIR="${WORKSPACE_DIR:-/workspace}"
+TOKEN_FILE="/home/vscode/.vscode-token"
+
+# Fix ownership of named volume mounts (volumes start as root:root)
+chown vscode:vscode /home/vscode/.vscode-server/extensions 2>/dev/null || true
+chown vscode:vscode /home/vscode/.token-store 2>/dev/null || true
+
+# Persist the connection token across container removals via named volume
+TOKEN_STORE="/home/vscode/.token-store/connection-token"
+if [ -z "${VSCODE_CONNECTION_TOKEN:-}" ]; then
+    if [ -f "${TOKEN_STORE}" ]; then
+        VSCODE_CONNECTION_TOKEN="$(cat "${TOKEN_STORE}")"
+        echo "[startup] Reusing persisted connection token"
+    else
+        VSCODE_CONNECTION_TOKEN="$(openssl rand -hex 32)"
+        echo "${VSCODE_CONNECTION_TOKEN}" > "${TOKEN_STORE}"
+        chown vscode:vscode "${TOKEN_STORE}"
+        chmod 600 "${TOKEN_STORE}"
+        echo "[startup] Generated new connection token"
+    fi
+fi
+echo "${VSCODE_CONNECTION_TOKEN}" > "${TOKEN_FILE}"
+chown vscode:vscode "${TOKEN_FILE}"
+chmod 600 "${TOKEN_FILE}"
+
+# VS Code settings baked in by base image build (config/vscode-settings.json)
+# No runtime settings generation needed here
+
+# Generate nginx config with resolved ports
+cat > /etc/nginx/conf.d/vscode.conf << NGINX_CONF
+server {
+    listen ${SSL_PORT} ssl;
+    ssl_certificate     /etc/nginx/ssl/server.crt;
+    ssl_certificate_key /etc/nginx/ssl/server.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    location / {
+        proxy_pass         http://127.0.0.1:${VSCODE_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade \$http_upgrade;
+        proxy_set_header   Connection "upgrade";
+        proxy_set_header   Host \$http_host;
+        proxy_read_timeout 86400;
+    }
+}
+NGINX_CONF
+
+echo "[startup] Starting nginx (TLS on :${SSL_PORT})..."
+nginx -g "daemon off;" &
+NGINX_PID=$!
+
+echo "[startup] Starting VS Code Server (HTTP on 127.0.0.1:${VSCODE_PORT})..."
+su - vscode -c "/usr/local/bin/code-server \
+    --host 127.0.0.1 \
+    --port ${VSCODE_PORT} \
+    --connection-token-file ${TOKEN_FILE} \
+    --accept-server-license-terms \
+    '${WORKSPACE_DIR}'" &
+VSCODE_PID=$!
+
+echo ""
+echo "[startup] ================================================================"
+echo "[startup] HTTPS access:  https://127.0.0.1:${SSL_PORT}/?tkn=${VSCODE_CONNECTION_TOKEN}"
+echo "[startup] Workspace:     ${WORKSPACE_DIR}"
+echo "[startup] ================================================================"
+echo ""
+
+# Exit if either process dies
+wait -n $NGINX_PID $VSCODE_PID
+echo "[startup] A process exited - shutting down"
+kill $NGINX_PID $VSCODE_PID 2>/dev/null || true
+STARTUP_SSL
+
+RUN chmod +x /opt/init/startup-ssl.sh
+
+# Certs are bind-mounted at runtime: ca/server.crt + ca/server.key → /etc/nginx/ssl/
+# This avoids baking private key into the image layer
+RUN mkdir -p /etc/nginx/ssl
+
+# Default port; override at runtime via SSL_PORT env var
+EXPOSE 8444
+
+ENTRYPOINT ["/opt/init/startup-ssl.sh"]
