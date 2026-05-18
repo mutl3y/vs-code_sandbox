@@ -391,6 +391,18 @@ The startup script runs as root before dropping to `vscode` user for VS Code Ser
 
 **Decision**: `chown vscode:vscode <volume-mountpoints>` at the top of `startup-ssl.sh`.
 
+### Why `--userns=keep-id` for Workspace Bind Mounts
+
+Rootless Podman uses a user namespace by default. The container's uid=0 (root) maps to the calling user's host UID, while uid=1000 (`vscode`) maps to a subordinate UID (e.g. 100001). Bind-mounted workspace directories owned by the host user (uid=1000) appear root-owned inside the container — the `vscode` process has no write access.
+
+Options considered:
+
+1. **`-v :U` flag** — recursively chowns the host directory to match the container user. Modifies the host filesystem; unacceptable for a shared workspace path.
+2. **`USER_UID` build arg** — rebakes the `vscode` uid at image build time to match the host user. Doesn't fix the namespace mapping at runtime; only works when build UID = run UID in the same namespace.
+3. **`--userns=keep-id`** — Podman runtime flag that maps the calling user's UID to itself inside the container. `/workspace` appears owned by `vscode` (uid=1000) inside the container because the host user (uid=1000) and container user share the same value. No host filesystem changes.
+
+**Decision**: `--userns=keep-id` on every `podman run` in `ssl_create_session()`. One-time cost: Podman creates an ID-mapped copy of image layers on first use.
+
 ### Why Workspace Trust Is Disabled by Config File, Not ENV
 
 VS Code Server reads workspace trust settings from two scopes: Machine settings and User settings. Machine-scope alone is not sufficient for the web client — it reads User settings before applying Machine-scope overrides.

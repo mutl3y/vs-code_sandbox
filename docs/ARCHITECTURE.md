@@ -113,9 +113,30 @@ proxy_set_header Host $http_host;   # preserves port number
 # NOT $host — that strips the port, breaking VS Code WebSocket URL construction
 ```
 
+## Workspace Permissions: `--userns=keep-id`
+
+Rootless Podman runs containers in a user namespace where UIDs are remapped:
+
+| Location                          | UID                                  |
+|-----------------------------------|--------------------------------------|
+| Host user (`mark`)                | 1000                                 |
+| Container `root`                  | → host uid 1000 (your user)          |
+| Container `vscode` (uid=1000)     | → host subordinate UID (~100001)     |
+
+This means bind-mounted workspace files — owned by uid=1000 on the host — appear **root-owned** inside the container. The `vscode` process (mapped to a sub-uid) cannot write to them.
+
+`--userns=keep-id` fixes this by keeping the calling user's UID identical inside the container:
+
+| Location                          | UID                                  |
+|-----------------------------------|--------------------------------------|
+| Host user (`mark`)                | 1000                                 |
+| Container `vscode` (uid=1000)     | → host uid 1000 ✓                    |
+
+All `ssl-create` sessions use this flag. On first use, Podman creates an ID-mapped copy of the image layers — a one-time operation per image.
+
 ## CA and Certificate Infrastructure
 
-```
+```text
 ca/
   create-ca.sh       → generates ca-cert.pem + ca-key.pem (run once)
   gen-cert.sh        → generates server.crt + server.key (run per machine)
@@ -126,7 +147,8 @@ ca/
 ```
 
 Certs are bind-mounted at `podman run` time:
-```
+
+```text
 ca/server.crt → /etc/nginx/ssl/server.crt (read-only)
 ca/server.key → /etc/nginx/ssl/server.key (read-only)
 ```
@@ -137,7 +159,7 @@ Never baked into the image (no private keys in image layers).
 
 Sessions are completely independent containers. The only shared resource is the connection token volume, allowing a single bookmark to access any session by changing the port number.
 
-```
+```text
 Session 1: https://<host>:8540/?tkn=<same-token>&folder=/workspace
 Session 2: https://<host>:8541/?tkn=<same-token>&folder=/workspace
 Session 3: https://<host>:8542/?tkn=<same-token>&folder=/workspace
