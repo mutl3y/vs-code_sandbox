@@ -108,6 +108,7 @@ Token is 32 bytes of random hex. Stored in `vscode-ssl-token-shared` named volum
 - Browser WebSocket traffic flows through nginx with correct headers
 
 Critical nginx proxy header:
+
 ```nginx
 proxy_set_header Host $http_host;   # preserves port number
 # NOT $host — that strips the port, breaking VS Code WebSocket URL construction

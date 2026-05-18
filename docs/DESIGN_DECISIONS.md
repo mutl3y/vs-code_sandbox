@@ -4,15 +4,18 @@
 
 ### Why This Over Other Options?
 
-**Option 1: Remote SSH into Container**
+#### Option 1: Remote SSH into Container
+
 - Pros: Orchestrator on host, terminal on SSH
 - Cons: Two-tier complexity, host/container boundary management
 
-**Option 2: Docker Exec into Agent Containers**
+#### Option 2: Docker Exec into Agent Containers
+
 - Pros: Simple agent execution
 - Cons: No persistent VS Code experience, ephemeral
 
-**Option 3: VS Code Server in Container** ✅
+#### Option 3: VS Code Server in Container ✅
+
 - Pros: Full isolation, persistent settings, simple architecture, native agent execution
 - Cons: Slightly larger image (~1.2 GB)
 
@@ -23,6 +26,7 @@
 ### Why Not Multi-Stage?
 
 Multi-stage Dockerfile with builder/runtime separation would:
+
 - Reduce image size by ~66% (save ~800 MB)
 - Separate build tools from runtime tools
 - Improve security (no build tools in prod)
@@ -40,31 +44,37 @@ Multi-stage Dockerfile with builder/runtime separation would:
 ## Named Volumes vs. Tmpfs
 
 ### Option A: Named Volumes (Chosen)
+
 ```yaml
 vscode-session-1-data:
   driver: local  # Persists to host filesystem
 ```
 
 **Pros:**
+
 - VS Code settings survive host restart
 - Backup/restore easy
 - Debuggable (files on host disk)
 
 **Cons:**
+
 - Uses host storage (~2-3 GB per session)
 - Slower than tmpfs
 
 ### Option B: Tmpfs (In-Memory)
+
 ```yaml
 vscode-session-1-data:
   driver: tmpfs  # Fast, ephemeral
 ```
 
 **Pros:**
+
 - Fast I/O
 - Auto-cleanup on restart
 
 **Cons:**
+
 - Settings lost on restart
 - Host restart = lost VS Code config
 
@@ -75,6 +85,7 @@ vscode-session-1-data:
 ### Why These Limits?
 
 Typical development workload:
+
 - Single builder task: Uses 2-3 CPU, 1.5-2 GB RAM
 - Multiple tools (VS Code, npm build, Docker, tests): ~1 GB overhead
 - Buffer for spikes: ~1 GB
@@ -97,6 +108,7 @@ Typical development workload:
 ### /home/vscode/.local/share/code-server (VS Code Data)
 
 Why mount here?
+
 - VS Code Server stores extensions, settings, workspace metadata here
 - Large data (extensions can be 100s of MB)
 - Should persist across container restarts
@@ -106,6 +118,7 @@ Why mount here?
 ### /home/vscode/.config/code-server (VS Code Config)
 
 Why separate from data?
+
 - Keeps config separate for easier backup/restore
 - Smaller size (just JSON preferences)
 - Independent versioning (update one without other)
@@ -115,6 +128,7 @@ Why separate from data?
 ### /home/vscode/.agent-cache (Build Cache)
 
 Why mount?
+
 - npm cache, build artifacts, pip cache can be >1 GB
 - Persisting speeds up builds dramatically
 - Saves bandwidth (don't re-download packages)
@@ -124,6 +138,7 @@ Why mount?
 ### /workspace (Project Files)
 
 Why host mount (not volume)?
+
 - Source code should be on host (for IDE, version control, backups)
 - Bidirectional sync: edits in container appear on host
 - Developers expect files to persist beyond container lifecycle
@@ -133,6 +148,7 @@ Why host mount (not volume)?
 ### /worktrees (Git Worktrees)
 
 Why host mount?
+
 - Worktrees contain git metadata + checked-out branches
 - Should be accessible by multiple containers (for merge operations)
 - Needs to persist for git operations to work across sessions
@@ -148,11 +164,13 @@ RUN groupadd -r vscode && useradd -r -g vscode -u 1000 -m vscode
 ```
 
 **Why 1000?**
+
 - Standard for devcontainer base images
 - Host user typically gets UID 1000 (first non-system user)
 - Easier file ownership mapping (container 1000 = host 1000)
 
 **Security implications:**
+
 - Prevents root execution
 - Agents cannot escalate privileges (unless explicitly configured with sudo)
 - Container compromise doesn't give host root
@@ -165,6 +183,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
 ```
 
 **Why not simple PID check?**
+
 - PID check only verifies process exists, not that it's responsive
 - HTTP health check verifies:
   - Port is listening
@@ -172,10 +191,12 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
   - Network stack works
 
 **Why 30s interval?**
+
 - VS Code Server startup can be slow (5-15s)
 - 30s interval provides quick feedback without excessive checking
 
 **Why 3 retries before failure?**
+
 - Allows transient blips (e.g., CPU spike causing slow response)
 - 3 retries × 10s timeout = 30s total grace period
 
@@ -184,6 +205,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
 ### Why Shared vs. Isolated Per Session?
 
 **Option A: Shared Bridge Network** (Chosen)
+
 ```yaml
 networks:
   vscode-network:
@@ -191,14 +213,17 @@ networks:
 ```
 
 **Pros:**
+
 - Sessions can communicate (useful for coordination)
 - Simpler DNS (all containers see each other)
 - Easier debugging (can ping between sessions)
 
 **Cons:**
+
 - Slight security increase (network isolation per session would be better)
 
-**Option B: Isolated Per Session**
+#### Option B: Isolated Per Session
+
 ```yaml
 networks:
   vscode-network-1: ...
@@ -206,9 +231,11 @@ networks:
 ```
 
 **Pros:**
+
 - Better security (sessions can't reach each other)
 
 **Cons:**
+
 - Complex orchestration (need per-session bridge)
 - Harder debugging
 - Prevents session coordination
@@ -226,16 +253,19 @@ volumes:
 ```
 
 **Socket Paths:**
+
 - Podman rootless (recommended): `/run/user/$UID/podman/podman.sock` (e.g., `/run/user/1000/podman/podman.sock`)
 - Podman rootful: `/run/podman/podman.sock`
 - Docker: `/var/run/docker.sock`
 
 **If mounted:**
+
 - Agents can spawn sibling containers (useful for E2E tests, nested builds)
 - Read-only prevents socket manipulation
 - Auto-detected by launcher.sh, overridable via `.env`
 
 **If not mounted:**
+
 - Agents can't spawn containers (acceptable)
 - Better security (no privileged access)
 
@@ -250,11 +280,13 @@ RUN git config --global --add safe.directory '*' && \
 ```
 
 **Why global config?**
+
 - Agents need git to work (worktree creation, merges, commits)
 - Global config prevents "not configured" errors
 - `safe.directory '*'` allows worktrees with different owners
 
 **Why generic email/name?**
+
 - Agents are not individual developers
 - Email/name are metadata; actual commits attributed in merge log
 - Generic keeps things simple
@@ -271,6 +303,7 @@ RUN git config --global --add safe.directory '*' && \
 6. Start VS Code Server
 
 **Why this order?**
+
 - Fail fast if volumes missing (no point starting VS Code)
 - Docker socket check is optional (graceful degradation)
 - npm setup before VS Code (builds might start immediately)
@@ -281,7 +314,8 @@ RUN git config --global --add safe.directory '*' && \
 ### Key Insight: Volumes
 
 Each session gets **independent named volumes**:
-```
+
+```text
 Session 1: vscode-session-1-data, vscode-session-1-config, vscode-session-1-cache
 Session 2: vscode-session-2-data, vscode-session-2-config, vscode-session-2-cache
 Session 3: vscode-session-3-data, vscode-session-3-config, vscode-session-3-cache
@@ -290,7 +324,8 @@ Session 3: vscode-session-3-data, vscode-session-3-config, vscode-session-3-cach
 **Result**: Each session has completely independent VS Code state (settings, extensions, caches).
 
 **Host mounts**:
-```
+
+```text
 Session 1: /path/to/workspace-1 → /workspace
 Session 2: /path/to/workspace-2 → /workspace
 Session 3: /path/to/workspace-3 → /workspace
@@ -299,7 +334,8 @@ Session 3: /path/to/workspace-3 → /workspace
 **Result**: Each session has independent workspace and worktrees (no cross-session contamination).
 
 **Ports**:
-```
+
+```text
 Session 1: 8443
 Session 2: 8444
 Session 3: 8445
@@ -310,7 +346,7 @@ Session 3: 8445
 ## Trade-offs Summary
 
 | Decision | Pro | Con |
-|----------|-----|-----|
+| -------- | --- | --- |
 | Single Dockerfile | Simple | Larger image (~1.2 GB) |
 | Named volumes | Persistent | Uses host disk |
 | 4 CPU, 4 GB limit | Balanced | Might throttle heavy builds |
