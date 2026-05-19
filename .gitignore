@@ -77,3 +77,6 @@ ca/ca-cert.pem
 ca/*.srl
 ca/*.csr
 links/
+.github
+hooks.json
+AGENTS.md

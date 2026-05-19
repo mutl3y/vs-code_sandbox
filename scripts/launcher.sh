@@ -76,6 +76,19 @@ validate_environment() {
         exit 1
     fi
 
+    # ── Check host Git credentials ──────────────────────────────────────────
+    if [ ! -f "$HOME/.git-credentials" ] && [ ! -d "$HOME/.config/gh" ]; then
+        print_warning "No Git credentials found on host (~/.git-credentials or ~/.config/gh)"
+        print_info "  Run on your HOST-side setup first:"
+        print_info "    git config --global credential.helper store"
+        print_info "    # Then do a git push/pull to save credentials"
+        print_info "    # OR: gh auth login"
+    elif [ -f "$HOME/.git-credentials" ]; then
+        print_success "Host Git credentials found (~/.git-credentials)"
+    elif [ -d "$HOME/.config/gh" ]; then
+        print_success "Host GitHub CLI auth found (~/.config/gh)"
+    fi
+
     print_success "Environment validated"
 }
 
@@ -545,8 +558,12 @@ ssl_create_session() {
     print_info "Certs:      ${cert_dir}"
 
     local ext_vol="vscode-ssl-extensions-${session_num}"
+    local data_vol="vscode-ssl-server-data-${session_num}"
+    local config_vol="vscode-ssl-config-${session_num}"
     local token_vol="vscode-ssl-token-shared"
     print_info "Extensions: ${ext_vol} (named volume, survives ssl-remove)"
+    print_info "Server data: ${data_vol} (secrets, GitHub tokens, machine ID)"
+    print_info "Config:     ${config_vol} (tunnel/auth state)"
     print_info "Token:      ${token_vol} (shared across all SSL sessions)"
 
     podman run -d \
@@ -556,11 +573,14 @@ ssl_create_session() {
         -e SSL_PORT="${ssl_port}" \
         -e VSCODE_PORT="${vs_port}" \
         -e WORKSPACE_DIR="/workspace" \
-        -v "${cert}:/etc/nginx/ssl/server.crt:ro" \
-        -v "${key}:/etc/nginx/ssl/server.key:ro" \
-        -v "${workspace_path}:/workspace:rw" \
+        -v "${cert}:/etc/nginx/ssl/server.crt:ro,z" \
+        -v "${key}:/etc/nginx/ssl/server.key:ro,z" \
+        -v "${workspace_path}:/workspace:rw,z" \
         -v "${ext_vol}:/home/vscode/.vscode-server/extensions:rw" \
+        -v "${data_vol}:/home/vscode/.vscode-server/data:rw" \
+        -v "${config_vol}:/home/vscode/.config:rw" \
         -v "${token_vol}:/home/vscode/.token-store:rw" \
+        -v "${HOME}/.config/gh:/home/vscode/.config/gh-host:ro,z" \
         vscode-agent:ssl
 
     print_info "Waiting for startup..."
@@ -597,17 +617,19 @@ ssl_stop_session() {
 ssl_remove_session() {
     local session_num=$1
     local container_name="vscode-ssl-${session_num}"
-    print_warning "This will remove container ${container_name} (extensions volume preserved)"
+    print_warning "This will remove container ${container_name} (extensions/data/config volumes preserved)"
     read -p "Are you sure? (y/N) " -n 1 -r; echo
     [[ ! $REPLY =~ ^[Yy]$ ]] && { print_info "Cancelled"; return; }
-    podman rm -f "${container_name}" 2>/dev/null && print_success "${container_name} removed (extensions in vscode-ssl-extensions-${session_num})" || print_error "Failed to remove ${container_name}"
+    podman rm -f "${container_name}" 2>/dev/null && print_success "${container_name} removed (volumes preserved: vscode-ssl-extensions-${session_num}, vscode-ssl-server-data-${session_num}, vscode-ssl-config-${session_num})" || print_error "Failed to remove ${container_name}"
 }
 
 ssl_purge_session() {
     local session_num=$1
     local container_name="vscode-ssl-${session_num}"
     local ext_vol="vscode-ssl-extensions-${session_num}"
-    print_warning "This will remove container ${container_name} and its extensions volume (irreversible)"
+    local data_vol="vscode-ssl-server-data-${session_num}"
+    local config_vol="vscode-ssl-config-${session_num}"
+    print_warning "This will remove container ${container_name} and its extensions/data/config volumes (irreversible)"
     print_info  "Shared token volume is preserved unless all sessions are purged"
     read -p "Are you sure? (y/N) " -n 1 -r; echo
     [[ ! $REPLY =~ ^[Yy]$ ]] && { print_info "Cancelled"; return; }
@@ -616,6 +638,16 @@ ssl_purge_session() {
         podman volume rm "${ext_vol}" && print_success "${ext_vol} removed" || print_error "Failed to remove ${ext_vol}"
     else
         print_info "Volume ${ext_vol} does not exist"
+    fi
+    if podman volume inspect "${data_vol}" &>/dev/null; then
+        podman volume rm "${data_vol}" && print_success "${data_vol} removed" || print_error "Failed to remove ${data_vol}"
+    else
+        print_info "Volume ${data_vol} does not exist"
+    fi
+    if podman volume inspect "${config_vol}" &>/dev/null; then
+        podman volume rm "${config_vol}" && print_success "${config_vol} removed" || print_error "Failed to remove ${config_vol}"
+    else
+        print_info "Volume ${config_vol} does not exist"
     fi
     # Remove shared token volume only if no other SSL sessions exist
     local token_vol="vscode-ssl-token-shared"
@@ -691,8 +723,8 @@ SSL Sessions (image: vscode-agent:ssl, token auth, TLS via nginx):
   ${GREEN}ssl-build${NC}                                   Build the SSL image
   ${GREEN}ssl-create${NC} <session> <path> [cert_dir]    Create SSL session (ports 8540-8542)
   ${GREEN}ssl-stop${NC} <session>                         Stop SSL session
-  ${GREEN}ssl-remove${NC} <session>                       Remove container (extensions volume preserved)
-  ${GREEN}ssl-purge${NC} <session>                        Remove container AND extensions volume
+    ${GREEN}ssl-remove${NC} <session>                       Remove container (extensions/data/config volumes preserved)
+    ${GREEN}ssl-purge${NC} <session>                        Remove container AND extensions/data/config volumes
   ${GREEN}ssl-list${NC}                                   List active SSL sessions (with token URLs)
   ${GREEN}ssl-token${NC} <session>                        Print access URL for SSL session
 

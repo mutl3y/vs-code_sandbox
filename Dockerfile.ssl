@@ -40,7 +40,36 @@ TOKEN_FILE="/home/vscode/.vscode-token"
 
 # Fix ownership of named volume mounts (volumes start as root:root)
 chown vscode:vscode /home/vscode/.vscode-server/extensions 2>/dev/null || true
+chown vscode:vscode /home/vscode/.vscode-server/data 2>/dev/null || true
+chown vscode:vscode /home/vscode/.config 2>/dev/null || true
 chown vscode:vscode /home/vscode/.token-store 2>/dev/null || true
+
+# ── GitHub CLI auth from host mount ────────────────────────────────────────
+# gh CLI config mounted at /home/vscode/.config/gh-host (avoids named volume shadow)
+if [ -d /home/vscode/.config/gh-host ] && command -v gh &>/dev/null; then
+    mkdir -p /home/vscode/.config/gh
+    cp -r /home/vscode/.config/gh-host/* /home/vscode/.config/gh/ 2>/dev/null || true
+    chown -R vscode:vscode /home/vscode/.config/gh 2>/dev/null || true
+    chmod -R 755 /home/vscode/.config/gh 2>/dev/null || true
+    # Run as vscode user so git gets the right global config
+    su - vscode -c "gh auth setup-git" 2>/dev/null || true
+    echo "[startup] GitHub CLI auth configured from host mount"
+fi
+
+# ── Start D-Bus (needed for gnome-keyring / libsecret) ────────────────────
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+    mkdir -p /run/dbus
+    dbus-daemon --system --fork 2>/dev/null || true
+    eval "$(dbus-launch --sh-syntax 2>/dev/null)" || true
+    echo "[startup] D-Bus session started for secret storage"
+fi
+
+# ── Unlock gnome-keyring (needed for VS Code secret persistence) ────────────
+if command -v gnome-keyring-daemon &>/dev/null; then
+    echo "" | gnome-keyring-daemon --unlock --foreground 2>/dev/null &
+    sleep 0.5
+    echo "[startup] gnome-keyring unlocked for secret storage"
+fi
 
 # Persist the connection token across container removals via named volume
 TOKEN_STORE="/home/vscode/.token-store/connection-token"
@@ -63,6 +92,22 @@ chmod 600 "${TOKEN_FILE}"
 # VS Code settings baked in by base image build (config/vscode-settings.json)
 # No runtime settings generation needed here
 
+# Persist a stable machine-id so VS Code secrets remain decryptable across
+# container recreation. The value lives in the persisted data volume.
+STABLE_ID_FILE="/home/vscode/.vscode-server/data/stable-machine-id"
+if [ ! -s "${STABLE_ID_FILE}" ] || ! grep -Eq '^[a-f0-9]{32}$' "${STABLE_ID_FILE}" 2>/dev/null; then
+    echo "[startup] Generating stable machine ID (first boot)..."
+    mkdir -p "$(dirname "${STABLE_ID_FILE}")"
+    tr -d '\n-' < /proc/sys/kernel/random/uuid > "${STABLE_ID_FILE}" || true
+    if [ ! -s "${STABLE_ID_FILE}" ]; then
+        openssl rand -hex 16 > "${STABLE_ID_FILE}"
+    fi
+    chown vscode:vscode "${STABLE_ID_FILE}" 2>/dev/null || true
+    chmod 444 "${STABLE_ID_FILE}"
+fi
+echo "[startup] Applying stable machine ID..."
+printf '%s\n' "$(cat "${STABLE_ID_FILE}")" > /etc/machine-id
+
 # Generate nginx config with resolved ports
 cat > /etc/nginx/conf.d/vscode.conf << NGINX_CONF
 server {
@@ -83,17 +128,37 @@ server {
 }
 NGINX_CONF
 
+# Inject GitHub token from host gh CLI auth into VS Code Server environment
+GH_TOKEN=$(cat /home/vscode/.config/gh/hosts.yml 2>/dev/null | grep oauth_token | head -1 | sed "s/.*oauth_token: //" || echo "")
+if [ -n "${GH_TOKEN}" ]; then
+    echo "[startup] GitHub token injected from host gh CLI"
+fi
+
 echo "[startup] Starting nginx (TLS on :${SSL_PORT})..."
 nginx -g "daemon off;" &
 NGINX_PID=$!
 
 echo "[startup] Starting VS Code Server (HTTP on 127.0.0.1:${VSCODE_PORT})..."
-su - vscode -c "/usr/local/bin/code-server \
+cat > /tmp/vscode-launcher.sh << LAUNCHER
+#!/bin/bash
+export GITHUB_TOKEN='${GH_TOKEN}'
+
+# Populate gnome-keyring with GitHub token so VS Code auth provider finds it
+eval "\$(dbus-launch --sh-syntax 2>/dev/null)" || true
+if command -v secret-tool &>/dev/null; then
+    EXISTING="\$(secret-tool lookup service GitHub account mutl3y 2>/dev/null || echo '')"
+    if [ -z "\${EXISTING}" ]; then
+        printf '%s' "\${GITHUB_TOKEN}" | secret-tool store --label='GitHub token' service 'GitHub' account 'mutl3y' 2>/dev/null || true
+    fi
+fi
+exec /usr/local/bin/code-server \
     --host 127.0.0.1 \
     --port ${VSCODE_PORT} \
     --connection-token-file ${TOKEN_FILE} \
-    --accept-server-license-terms \
-    '${WORKSPACE_DIR}'" &
+    --accept-server-license-terms
+LAUNCHER
+chmod +x /tmp/vscode-launcher.sh
+su - vscode -c /tmp/vscode-launcher.sh &
 VSCODE_PID=$!
 
 echo ""
