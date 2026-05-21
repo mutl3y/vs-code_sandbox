@@ -1,145 +1,265 @@
-# VS Code Server in Container: Quick Start Guide
+# Step-by-Step Guide — VS Code Server in a Container
 
-## Overview
+This guide explains everything from scratch. No experience needed.
 
-Run Microsoft VS Code Server in isolated Podman containers, accessible via browser over HTTPS. Supports up to 3 parallel sessions, each with a separate workspace, persistent extensions, and a shared connection token.
+---
 
-Supports both **podman** (recommended) and **docker**.
+## What Is This?
 
-## Prerequisites
+Imagine VS Code — the code editor — running inside a little isolated box (called a **container**) on your computer. You open it in a **web browser** instead of installing it directly. This means:
 
-- Podman or Docker installed
-- `podman-compose` or `docker-compose`
-- `openssl` (for CA and cert generation)
+- Your code projects are safe inside the container
+- You can run up to **3 separate VS Code sessions** at once, each with its own project
+- It uses **HTTPS** (the padlock in your browser bar) so it's secure even on your local network
+- Extensions and settings survive when you stop and restart the container
 
-## First-Time Setup (SSL — Recommended)
+---
 
-### 1. Bootstrap your CA
+## Before You Start
+
+You need these installed on your computer:
+
+- **Podman** (like Docker, but runs without needing root/admin) — `podman --version` to check
+- **openssl** — usually already installed on Linux — `openssl version` to check
+- This project folder cloned to your computer
+
+---
+
+## One-Time Setup (Do This Once Per Computer)
+
+These steps only need to be done once. Skip them on future uses.
+
+### Step 1 — Create a Certificate Authority (CA)
+
+A CA is like your own personal stamp of approval for security certificates. Your browser will trust certificates stamped by it.
 
 ```bash
 bash ca/create-ca.sh
 ```
 
-Generates `ca/ca-cert.pem` (public) and `ca/ca-key.pem` (private, gitignored). Run once per machine.
+This creates two files:
 
-### 2. Generate a server certificate
+- `ca/ca-cert.pem` — the public stamp (you'll import this into your browser)
+- `ca/ca-key.pem` — the private key (keep this secret, it's in .gitignore)
+
+---
+
+### Step 2 — Generate a Server Certificate
+
+This certificate is what makes the padlock appear in your browser.
 
 ```bash
 bash ca/gen-cert.sh ca/ vscode-server
 ```
 
-Detects your host LAN IP automatically and adds it to the certificate SAN. Run once per machine (or after IP change).
+This detects your computer's local IP address automatically and creates:
 
-### 3. Trust the CA in your browser
+- `ca/server.crt` — the certificate
+- `ca/server.key` — the certificate's private key
 
-Import `ca/ca-cert.pem` into your browser's certificate authority trust store. Required only once per browser.
-
-See [HTTPS_SETUP.md](HTTPS_SETUP.md) for browser-specific instructions.
-
-### 4. Build the SSL image
-
-```bash
-./scripts/launcher.sh ssl-build
-```
-
-Builds `vscode-agent:ssl` (layered on `vscode-agent:latest`).
-
-### 5. Create a session
-
-```bash
-./scripts/launcher.sh ssl-create 1 /path/to/workspace
-```
-
-Prints the access URL:
-```
-https://192.168.x.x:8540/?tkn=<token>&folder=/workspace
-```
-
-Open it in the browser. Done.
+> **If your IP address changes** (e.g. you reconnect to WiFi), re-run this command.
 
 ---
 
-## SSL Session Commands
+### Step 3 — Tell Your Browser to Trust Your CA
+
+Your browser doesn't know about your homemade CA yet, so it will show a scary warning. Fix this by importing `ca/ca-cert.pem`:
+
+**Chrome or Edge:**
+
+1. Open Settings
+2. Search for "certificates"
+3. Click "Manage certificates" → "Authorities" tab
+4. Click "Import" and choose `ca/ca-cert.pem`
+5. Tick "Trust this certificate for identifying websites"
+6. Click OK
+
+**Firefox:**
+
+1. Open Settings
+2. Search for "certificates"
+3. Click "View Certificates" → "Authorities" tab
+4. Click "Import" and choose `ca/ca-cert.pem`
+5. Tick "Trust this CA to identify websites"
+6. Click OK
+
+> You only need to do this once per browser.
+
+---
+
+### Step 4 — Build the Container Image
+
+This downloads VS Code Server and packages everything up. It takes a few minutes the first time.
 
 ```bash
-# Build images
-./scripts/launcher.sh ssl-build                              # Build SSL image (also builds base)
-
-# Create sessions (ports 8540, 8541, 8542)
-./scripts/launcher.sh ssl-create 1 /path/to/workspace
-./scripts/launcher.sh ssl-create 2 /path/to/other-workspace
-./scripts/launcher.sh ssl-create 1 /path/to/workspace /path/to/certs  # custom cert dir
-
-# Inspect
-./scripts/launcher.sh ssl-list          # show all running sessions with URLs
-./scripts/launcher.sh ssl-token 1       # print access URL for session 1
-
-# Stop / remove
-./scripts/launcher.sh ssl-stop 1        # stop container (volumes kept)
-./scripts/launcher.sh ssl-remove 1      # remove container (extensions + token survive)
-./scripts/launcher.sh ssl-purge 1       # remove container AND its volumes (clean slate)
+./scripts/launcher.sh build
 ```
 
-## HTTP Session Commands (no auth, local use only)
+You'll see lots of output as it downloads and installs things. It's done when you see:
+
+```
+✓ Image built: vscode-agent:default
+```
+
+> **You only need to rebuild** when the Dockerfile changes (e.g. after a project update).
+
+---
+
+## Every Day — Starting a Session
+
+### Step 5 — Create a VS Code Session
+
+Pick a session number (1, 2, or 3) and give it the path to your project folder:
 
 ```bash
-./scripts/launcher.sh build             # Build HTTP base image
-./scripts/launcher.sh create 1 /path/to/workspace
+./scripts/launcher.sh create 1 /path/to/your/project
+```
+
+For example:
+
+```bash
+./scripts/launcher.sh create 1 /raid5/source/myproject
+```
+
+When it's ready, it prints a URL like:
+
+```
+URL: https://192.168.1.50:8550/?tkn=abc123def456...&folder=/workspace
+```
+
+**Copy that URL and open it in your browser.** Done! VS Code opens in your browser.
+
+---
+
+## Managing Sessions
+
+### See All Running Sessions
+
+```bash
 ./scripts/launcher.sh list
+```
+
+This shows every active session with its URL and connection token.
+
+---
+
+### Get the URL Again (If You Forgot It)
+
+```bash
+./scripts/launcher.sh token 1
+```
+
+Replace `1` with your session number.
+
+---
+
+### Stop a Session (Keep Your Data)
+
+```bash
 ./scripts/launcher.sh stop 1
-./scripts/launcher.sh start 1
+```
+
+The container stops but all your extensions and settings are saved. Start it again with `create`.
+
+---
+
+### Remove a Session (Container Gone, Data Stays)
+
+```bash
 ./scripts/launcher.sh remove 1
+```
+
+The container is deleted but your extensions and VS Code settings are saved in named volumes. They'll be there when you create a new session.
+
+---
+
+### Purge a Session (Clean Slate)
+
+```bash
 ./scripts/launcher.sh purge 1
-./scripts/launcher.sh logs 1
 ```
 
-HTTP sessions use ports 8443–8445.
+Removes the container **and** all its volumes — extensions, settings, server data. Use this when you want to start completely fresh. You'll need to type `yes` to confirm.
 
-## Ports Reference
+---
 
-| Session | HTTP port | SSL HTTPS port | SSL internal port |
-|---------|-----------|---------------|------------------|
-| 1       | 8443      | 8540          | 9100             |
-| 2       | 8444      | 8541          | 9101             |
-| 3       | 8445      | 8542          | 9102             |
+## Session Ports
 
-## Persistence
+Each session uses a different port so they don't clash:
 
-Extensions installed via the VS Code extension marketplace survive `ssl-remove` and `ssl-create` cycles. They are stored in a named Podman volume (`vscode-ssl-extensions-N`) that is only deleted by `ssl-purge`.
+| Session | URL Port | Example URL |
+|---------|---------|-------------|
+| 1 | 8550 | `https://192.168.x.x:8550/?tkn=...` |
+| 2 | 8551 | `https://192.168.x.x:8551/?tkn=...` |
+| 3 | 8552 | `https://192.168.x.x:8552/?tkn=...` |
 
-The connection token is stored in a shared named volume (`vscode-ssl-token-shared`). The token — and therefore your bookmarked URL — persists across container removal and recreation. All sessions share the same token; only the port differs.
+---
 
-## Workspace Trust
+## What Gets Saved?
 
-Workspace trust dialogs are disabled by default. The setting is baked into the image at build time via `config/vscode-settings.json`. No manual steps required.
+Here's what persists across container restarts (you won't lose it):
 
-## Updating / Rebuilding
+| What | Saved? |
+|------|--------|
+| Your code/project files | Yes — they're on your host machine, not in the container |
+| VS Code extensions you install | Yes — saved in a named volume |
+| VS Code settings and state | Yes — saved in a named volume |
+| Connection token (the `?tkn=` in the URL) | Yes — shared token, same URL every time |
 
-If you change `Dockerfile` or `Dockerfile.ssl`:
+---
+
+## All Commands at a Glance
 
 ```bash
-# Remove old images
-podman rmi vscode-agent:latest vscode-agent:ssl
+# One-time setup
+bash ca/create-ca.sh                              # Create your CA
+bash ca/gen-cert.sh ca/ vscode-server             # Generate server cert
+./scripts/launcher.sh build                       # Build the container image
 
-# Rebuild
-./scripts/launcher.sh ssl-build
-
-# Recreate your sessions
-./scripts/launcher.sh ssl-create 1 /path/to/workspace
+# Session management
+./scripts/launcher.sh create 1 /my/project        # Start session 1
+./scripts/launcher.sh create 2 /my/project        # Start session 2
+./scripts/launcher.sh list                        # Show all active sessions
+./scripts/launcher.sh token 1                     # Get URL for session 1
+./scripts/launcher.sh stop 1                      # Stop session 1 (data kept)
+./scripts/launcher.sh remove 1                    # Remove container (data kept)
+./scripts/launcher.sh purge 1                     # Remove container + all volumes
 ```
 
-Extensions and token volumes are unaffected by image rebuilds.
+---
 
-## Sharing / Cloning This Repo
+## Something Went Wrong?
 
-When cloning on a new machine:
-
+Check container logs first:
 ```bash
-bash ca/create-ca.sh          # create new CA
-bash ca/gen-cert.sh ca/ vscode-server   # create server cert for this machine's IP
-# Import ca/ca-cert.pem into browser
-./scripts/launcher.sh ssl-build
-./scripts/launcher.sh ssl-create 1 /path/to/workspace
+podman logs vscode-ssl-v2-1
 ```
 
-The `ca/` directory never contains private keys in git. Each machine generates its own.
+Common issues: port already in use (`ss -tlnp | grep 8550`), certs missing (`ca/server.crt`), image not built (`./scripts/launcher.sh build`).
+
+---
+
+## How It Works (Simple Version)
+
+```
+Your browser
+    ↓  HTTPS (encrypted, padlock)
+nginx inside the container  (handles the encryption)
+    ↓  unencrypted, but only inside the container
+mint-proxy  (handles secret storage for extensions)
+    ↓
+VS Code Server  (the actual editor)
+    ↓
+Your project files  (mounted from your computer)
+```
+
+The token in the URL (`?tkn=abc123...`) is like a password — VS Code checks it when you first connect, then remembers you via a cookie.
+
+---
+
+## Further Reading
+
+- [HTTPS_SETUP.md](HTTPS_SETUP.md) — deeper dive into certificates and HTTPS
+- [ARCHITECTURE.md](ARCHITECTURE.md) — full technical design
+- [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) — why things were built this way
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — fixing common problems

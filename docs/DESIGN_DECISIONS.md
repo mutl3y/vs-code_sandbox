@@ -397,6 +397,8 @@ nginx's `$host` variable normalises the Host header and strips the port number. 
 ### Why a Shared Connection Token Volume
 
 Options considered:
+
+
 1. Regenerate token on every container start — URL changes after every `ssl-remove`, breaking bookmarks
 2. Per-session token volumes — different token per session, need separate bookmarks
 3. Shared token volume — same token for all sessions, only port differs in URL
@@ -407,12 +409,16 @@ Option 3 is the most user-friendly. A single bookmark template works for all ses
 
 ### Why Extensions in a Named Volume (Not the Image)
 
+
 Baking extensions into the image:
+
 - Requires rebuild to add/remove extensions
 - Extensions have large binary blobs (bad for image layers)
 - Different sessions might want different extensions
 
+
 Named volume per session:
+
 - Installed interactively via VS Code's marketplace
 - Survives `ssl-remove`/`ssl-create` (only `ssl-purge` removes them)
 - Each session can have an independent extension set
@@ -447,9 +453,11 @@ Injecting via environment variable has no supported mechanism. Generating settin
 
 **Decision**: `config/vscode-settings.json` is `COPY`'d at build time to both `/home/vscode/.vscode-server/data/Machine/settings.json` and `/home/vscode/.vscode-server/data/User/settings.json`. Single source of truth, baked in.
 
+
 ### Two Images Instead of One
 
 Keeping HTTP (`vscode-agent:latest`) as a stable base and SSL (`vscode-agent:ssl`) as a separate layer means:
+
 - Base image is usable standalone for local/HTTP development
 - SSL image rebuilds are fast (only the nginx layer changes)
 - Clear separation of concerns

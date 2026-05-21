@@ -80,3 +80,5 @@ links/
 .github
 hooks.json
 AGENTS.md
+
+vscode-fork

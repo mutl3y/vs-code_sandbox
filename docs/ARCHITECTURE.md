@@ -2,102 +2,139 @@
 
 ## Overview
 
-Microsoft VS Code Server (`server-linux-x64-web`) running in Podman containers, accessible via browser over HTTPS with connection-token authentication.
+Microsoft VS Code Server (`server-linux-x64-web`) running in Podman containers, accessible via browser over HTTPS with connection-token authentication and mint-proxy secret encryption.
 
-Two image variants:
+Single image: `vscode-agent:default`  
+Base: `mcr.microsoft.com/vscode/devcontainers/base:ubuntu-22.04` (Microsoft official)
 
-| Image | Purpose | Auth | Port range |
-|-------|---------|------|-----------|
-| `vscode-agent:latest` | HTTP base, no auth | None | 8443–8445 |
-| `vscode-agent:ssl` | HTTPS via nginx + token auth | Connection token | 8540–8542 |
-
-## Container Topology (SSL Sessions)
+## Container Topology
 
 ```
 Browser
-  │  HTTPS (port 8540/8541/8542)
+  │  HTTPS (port 8550/8551/8552)
   ▼
 nginx (TLS termination, --network=host)
-  │  HTTP (127.0.0.1:9100/9101/9102, loopback only)
+  │  HTTP (127.0.0.1:9300/9301/9302, loopback only)
+  ▼
+mint-proxy (ServerKeyedAESCrypto key-minting + cookie management)
+  │  HTTP (127.0.0.1:9200/9201/9202, loopback only)
   ▼
 VS Code Server (server-linux-x64-web)
   │
-  ├── /workspace        ← host path bind-mount (project files)
-  ├── extensions vol    ← named volume (vscode-ssl-extensions-N)
-  └── token vol         ← named volume (vscode-ssl-token-shared)
+  ├── /workspace             ← host path bind-mount (project files)
+  ├── extensions vol         ← vscode-ssl-v2-extensions-N
+  ├── server data vol        ← vscode-ssl-v2-server-data-N
+  ├── config vol             ← vscode-ssl-v2-config-N
+  └── token store vol        ← vscode-ssl-v2-token-shared
 ```
 
-Each SSL session is an independent container. Three sessions maximum (ports 8540–8542).
+Each session is an independent container. Three sessions maximum (ports 8550–8552).
 
-## Image Layers
+## Port Map
+
+| Session | HTTPS (nginx) | HTTP redirect | Proxy (mint-proxy) | VS Code (internal) |
+|---------|--------------|--------------|--------------------|-----------------|
+| 1       | 8550         | 8440          | 9300               | 9200               |
+| 2       | 8551         | 8441          | 9301               | 9201               |
+| 3       | 8552         | 8442          | 9302               | 9202               |
+
+## Image Build Layers
 
 ```
 mcr.microsoft.com/vscode/devcontainers/base:ubuntu-22.04
-  └── vscode-agent:latest  (Dockerfile)
-        ├── System deps: git, python3, nodejs, curl, openssl
-        ├── VS Code Server binary (server-linux-x64-web, Microsoft official)
-        ├── vscode user (uid=1000, non-root)
-        ├── Workspace trust settings baked in (config/vscode-settings.json)
-        └── Startup script: /opt/init/startup.sh
-
-        └── vscode-agent:ssl  (Dockerfile.ssl)
-              ├── nginx (TLS termination)
-              ├── Startup script: /opt/init/startup-ssl.sh
-              │     ├── Fix volume ownership (extensions + token dirs)
-              │     ├── Reuse or generate connection token
-              │     ├── Generate nginx config with $http_host
-              │     ├── Start nginx (daemon off)
-              │     └── Start VS Code Server on loopback
-              └── EXPOSE 8444 (default; overridden by SSL_PORT env var)
+  └── vscode-agent:default  (Dockerfile — single stage)
+        ├── System deps: git, curl, gnupg, nginx, ca-certificates
+        ├── Secret storage: libsecret, gnome-keyring, dbus, dbus-x11
+        ├── GitHub CLI (GPG-verified install from cli.github.com)
+        ├── Node.js 22.x (from NodeSource)
+        ├── /workspace directory + permissions
+        ├── /opt/vscode-defaults/settings.json (from config/)
+        ├── /opt/mint-proxy.js (from scripts/)
+        ├── /opt/init/startup.sh (embedded via COPY heredoc)
+        └── VS Code Server binary (server-linux-x64-web, downloaded at build time)
 ```
+
+Also tagged as: `vscode-agent:stable`, `vscode-agent:ssl-v2`, `vscode-agent:latest`
+
+## Mint-Proxy: What and Why
+
+VS Code's `ServerKeyedAESCrypto` secret storage requires a server-side key-minting endpoint at `POST /_vscode-server/mint-key`. Without it, extensions cannot persist secrets (GitHub tokens, API keys) across browser sessions.
+
+`mint-proxy.js` is a lightweight Node.js HTTP proxy that:
+1. Intercepts `POST /_vscode-server/mint-key` requests
+2. Returns the server-side AES key half
+3. Sets `vscode-secret-key-path` and `vscode-cli-secret-half` cookies
+4. Forwards all other requests to VS Code unchanged
+
+Without mint-proxy, secrets are stored in-memory only and lost on page refresh.
 
 ## Volumes
 
-### SSL Sessions
-
 | Volume | Path in container | Scope | Survives |
 |--------|------------------|-------|---------|
-| `vscode-ssl-extensions-N` | `/home/vscode/.vscode-server/extensions` | Per session | `ssl-remove` |
-| `vscode-ssl-token-shared` | `/home/vscode/.token-store` | Shared (all sessions) | `ssl-remove` |
+| `vscode-ssl-v2-extensions-N` | `/home/vscode/.vscode-server/extensions` | Per session | `purge` |
+| `vscode-ssl-v2-server-data-N` | `/home/vscode/.vscode-server/data` | Per session | `purge` |
+| `vscode-ssl-v2-config-N` | `/home/vscode/.config` | Per session | `purge` |
+| `vscode-ssl-v2-token-shared` | `/home/vscode/.token-store` | Shared (all sessions) | manual only |
 | bind: workspace path | `/workspace` | Per session | Always (host dir) |
+| bind: `~/.config/gh` | `/home/vscode/.config/gh-host` | Read-only | Always |
 
-Extensions are per-session (each session can have a different set). The connection token is shared so all sessions use the same `?tkn=` URL parameter.
+The shared token volume means all sessions use the same `?tkn=` value — only the port differs.
 
-### HTTP Sessions (docker-compose)
-
-| Volume | Path in container | Purpose |
-|--------|------------------|---------|
-| bind: workspace path | `/workspace` | Project files |
-| bind: worktrees path | `/worktrees` | Git worktrees |
-
-## Startup Sequence (SSL)
+## Startup Sequence
 
 ```
-1.  Container starts → /opt/init/startup-ssl.sh
-2.  chown extensions volume → vscode:vscode
-3.  chown token store → vscode:vscode
-4.  Check /home/vscode/.token-store/connection-token
-       exists → reuse token (stable URL across restarts)
-       missing → generate new token, write to store
-5.  Write token to /home/vscode/.vscode-token
-6.  Generate /etc/nginx/conf.d/vscode.conf with SSL_PORT + VSCODE_PORT
-7.  Start nginx (daemon off)
-8.  su - vscode → start VS Code Server on 127.0.0.1:VSCODE_PORT
-9.  Print access URL to container log
-10. wait -n: exit if either process dies
+1.  Container starts → /opt/init/startup.sh (runs as root)
+2.  Fix ownership of volume mounts → chown vscode:vscode
+3.  First-run init: copy settings.json to DATA_DIR if not present
+4.  Git credential config (if .git-credentials mounted)
+5.  GitHub CLI auth setup (if gh-host volume mounted)
+6.  D-Bus init → dbus-daemon --system + dbus-launch
+7.  gnome-keyring unlock (background)
+8.  Connection token:
+      /home/vscode/.token-store/connection-token exists? → reuse
+      missing? → openssl rand -hex 32 → write to store
+9.  Write token to /home/vscode/.vscode-token
+10. Stable machine ID:
+      read /home/vscode/.vscode-server/data/stable-machine-id
+      (ensures encrypted secrets survive container rebuilds)
+11. Write /etc/machine-id from stable ID
+12. Generate /etc/nginx/conf.d/vscode.conf (TLS on SSL_PORT, proxy to PROXY_PORT)
+13. Start mint-proxy:  node /opt/mint-proxy.js (PROXY_PORT → VSCODE_PORT)
+14. Start nginx:       nginx -g "daemon off;" (SSL_PORT → PROXY_PORT)
+15. Start VS Code:     su - vscode → code-server --host 127.0.0.1 --port VSCODE_PORT
+16. Print access URL to container log
+17. wait -n: shut down all three if any one exits
 ```
 
 ## Authentication Flow
 
 ```
-User navigates to https://<host>:8540/?tkn=<token>&folder=/workspace
+User navigates to https://<host>:8550/?tkn=<token>&folder=/workspace
     ↓
-VS Code Server validates token → sets auth cookie → 302 → /
+nginx (TLS) → mint-proxy
+    ↓
+mint-proxy forwards to VS Code + sets secret cookies on first mint-key response
+    ↓
+VS Code validates token → sets auth cookie → 302 → /
     ↓
 All subsequent requests use cookie (no token in URL after first load)
+    ↓
+Extension secrets use ServerKeyedAESCrypto (via mint-proxy cookies) → persisted in gnome-keyring
 ```
 
-Token is 32 bytes of random hex. Stored in `vscode-ssl-token-shared` named volume so it persists across container removal/recreation.
+## Networking: Why `--network=host`
+
+Podman's default pasta networking breaks WebSocket connections to VS Code. Using `--network=host` binds the container directly to the host network stack. nginx listens on the host SSL port and proxies to mint-proxy on loopback.
+
+## WebSocket: Why `$http_host` Not `$host`
+
+nginx's `$host` strips the port from the Host header. VS Code uses Host to build WebSocket URLs — without the port it would try `wss://hostname/` (port 443) instead of `wss://hostname:8550/`, causing **WebSocket Error 1006**.
+
+Fix in generated nginx config:
+```nginx
+proxy_set_header Host $http_host;  # preserves :8550
+```
 
 ## Networking
 
