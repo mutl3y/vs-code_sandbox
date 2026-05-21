@@ -1,0 +1,9 @@
+{
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@types/vinyl-fs": "^3.0.7"
+  },
+  "dependencies": {
+    "vinyl-fs": "^4.0.2"
+  }
+}

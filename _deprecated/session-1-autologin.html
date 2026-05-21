@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>VS Code Session 1 - Auto-Login</title>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 40px; background: #1e1e1e; color: #d4d4d4; }
+        .container { max-width: 600px; margin: 0 auto; }
+        h1 { color: #4fc3f7; }
+        .info { background: #252526; padding: 20px; border-radius: 8px; margin: 20px 0; }
+        .status { padding: 12px; margin: 20px 0; border-radius: 4px; text-align: center; font-weight: bold; }
+        .success { background: #4caf50; color: white; }
+        .loading { background: #ff9800; color: white; }
+        code { background: #333; padding: 2px 6px; border-radius: 3px; font-family: 'Courier New', monospace; word-break: break-all; }
+        p { line-height: 1.8; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 VS Code Session Auto-Login</h1>
+        <div id="status" class="status loading">🔄 Connecting to session...</div>
+
+        <div class="info">
+            <p><strong>Session:</strong> <code>Session 1</code></p>
+            <p><strong>Host:</strong> <code>https://192.168.0.29:8443</code></p>
+            <p><strong>Password:</strong> <code>milt0n***</code></p>
+            <p><strong>Status:</strong> <span id="connect-status">Initializing...</span></p>
+            <p style="font-size: 0.9em; color: #888;">🔒 Secured with TLS</p>
+        </div>
+    </div>
+
+    <script>
+        const sessionNum = '1';
+        const password = 'milt0n';
+        const hostIp = '192.168.0.29';
+        const port = '8443';
+        const url = `https://${hostIp}:${port}`;
+
+        console.log('Auto-login initializing...', { sessionNum, port });
+
+        function attempt_login() {
+            document.getElementById('connect-status').textContent = 'Connecting to secure session (please accept certificate warning if prompted)...';
+            // Give browser time to load the page naturally
+            // This allows users to accept self-signed cert warning if needed
+            setTimeout(() => {
+                window.location.href = url + '/login';
+            }, 1500);
+        }
+
+        function attempt_password_submit() {
+            document.getElementById('connect-status').textContent = 'Attempting password submission...';
+            const iframe = document.createElement('iframe');
+            iframe.style.display = 'none';
+            iframe.src = url + '/login';
+            document.body.appendChild(iframe);
+
+            iframe.onload = () => {
+                try {
+                    const doc = iframe.contentDocument || iframe.contentWindow.document;
+                    const passwordInput = doc.querySelector('input[type="password"]');
+
+                    if (passwordInput) {
+                        passwordInput.value = password;
+                        const submitBtn = doc.querySelector('button[type="submit"]') || doc.querySelector('button');
+                        if (submitBtn) {
+                            document.getElementById('status').textContent = '✅ Logging in...';
+                            document.getElementById('status').className = 'status success';
+                            document.getElementById('connect-status').textContent = 'Password submitted, redirecting...';
+                            submitBtn.click();
+                            setTimeout(() => {
+                                window.location.href = url + '/';
+                            }, 800);
+                        } else {
+                            document.getElementById('connect-status').textContent = 'Could not find submit button, redirecting...';
+                            setTimeout(() => {
+                                window.location.href = url + '/';
+                            }, 1000);
+                        }
+                    } else {
+                        document.getElementById('connect-status').textContent = 'Session already authenticated, opening...';
+                        window.location.href = url + '/';
+                    }
+                } catch (e) {
+                    console.error('CORS or frame access error (expected):', e.message);
+                    // Self-signed cert or CORS issue - redirect directly
+                    document.getElementById('connect-status').textContent = 'Redirecting to session...';
+                    setTimeout(() => {
+                        window.location.href = url + '/';
+                    }, 500);
+                }
+            };
+
+            iframe.onerror = () => {
+                document.getElementById('connect-status').textContent = 'Redirecting to session...';
+                setTimeout(() => {
+                    window.location.href = url + '/';
+                }, 500);
+            };
+        }
+
+        attempt_login();
+    </script>
+</body>
+</html>

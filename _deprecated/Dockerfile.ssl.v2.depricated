@@ -1,0 +1,159 @@
+# ============================================================================
+# Dockerfile.ssl.v2: VS Code Server with HTTPS + ServerKeyedAESCrypto
+# ============================================================================
+# Extends Dockerfile.ssl with the mint-proxy to enable proper encrypted
+# secret storage. The proxy:
+#   - Handles POST /_vscode-server/mint-key (returns server key half)
+#   - Sets vscode-secret-key-path + vscode-cli-secret-half cookies on every
+#     root response, enabling ServerKeyedAESCrypto in the browser workbench
+#
+# Architecture:
+#   browser → nginx (TLS :SSL_PORT) → mint-proxy (:PROXY_PORT) → VS Code (:VSCODE_PORT)
+# ============================================================================
+
+FROM vscode-agent:ssl
+
+LABEL description="VS Code Server - HTTPS + ServerKeyedAESCrypto secret storage (v2)"
+LABEL maintainer="Mutl3y"
+
+USER root
+
+# Copy the mint proxy script
+COPY scripts/mint-proxy.js /opt/mint-proxy.js
+
+# Startup script — same as Dockerfile.ssl but inserts the mint-proxy between
+# nginx and VS Code Server.
+COPY <<'STARTUP_V2' /opt/init/startup-ssl-v2.sh
+#!/bin/bash
+set -euo pipefail
+
+SSL_PORT="${SSL_PORT:-8444}"
+VSCODE_PORT="${VSCODE_PORT:-8443}"
+# Proxy sits between nginx and VS Code
+PROXY_PORT="${PROXY_PORT:-$((VSCODE_PORT + 100))}"
+WORKSPACE_DIR="${WORKSPACE_DIR:-/workspace}"
+TOKEN_FILE="/home/vscode/.vscode-token"
+
+# Fix ownership of named volume mounts
+chown vscode:vscode /home/vscode/.vscode-server/extensions 2>/dev/null || true
+chown vscode:vscode /home/vscode/.vscode-server/data 2>/dev/null || true
+chown vscode:vscode /home/vscode/.config 2>/dev/null || true
+chown vscode:vscode /home/vscode/.token-store 2>/dev/null || true
+
+# ── GitHub CLI auth ─────────────────────────────────────────────────────────
+if [ -d /home/vscode/.config/gh-host ] && command -v gh &>/dev/null; then
+    mkdir -p /home/vscode/.config/gh
+    cp -r /home/vscode/.config/gh-host/* /home/vscode/.config/gh/ 2>/dev/null || true
+    chown -R vscode:vscode /home/vscode/.config/gh 2>/dev/null || true
+    chmod -R 755 /home/vscode/.config/gh 2>/dev/null || true
+    su - vscode -c "gh auth setup-git" 2>/dev/null || true
+    echo "[startup-v2] GitHub CLI auth configured"
+fi
+
+# ── D-Bus + gnome-keyring ────────────────────────────────────────────────────
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+    mkdir -p /run/dbus
+    dbus-daemon --system --fork 2>/dev/null || true
+    eval "$(dbus-launch --sh-syntax 2>/dev/null)" || true
+fi
+if command -v gnome-keyring-daemon &>/dev/null; then
+    echo "" | gnome-keyring-daemon --unlock --foreground 2>/dev/null &
+    sleep 0.5
+fi
+
+# ── Connection token ─────────────────────────────────────────────────────────
+TOKEN_STORE="/home/vscode/.token-store/connection-token"
+if [ -z "${VSCODE_CONNECTION_TOKEN:-}" ]; then
+    if [ -f "${TOKEN_STORE}" ]; then
+        VSCODE_CONNECTION_TOKEN="$(cat "${TOKEN_STORE}")"
+    else
+        VSCODE_CONNECTION_TOKEN="$(openssl rand -hex 32)"
+        echo "${VSCODE_CONNECTION_TOKEN}" > "${TOKEN_STORE}"
+        chown vscode:vscode "${TOKEN_STORE}"
+        chmod 600 "${TOKEN_STORE}"
+    fi
+fi
+echo "${VSCODE_CONNECTION_TOKEN}" > "${TOKEN_FILE}"
+chown vscode:vscode "${TOKEN_FILE}"
+chmod 600 "${TOKEN_FILE}"
+
+# ── Stable machine ID ────────────────────────────────────────────────────────
+STABLE_ID_FILE="/home/vscode/.vscode-server/data/stable-machine-id"
+if [ ! -s "${STABLE_ID_FILE}" ] || ! grep -Eq '^[a-f0-9]{32}$' "${STABLE_ID_FILE}" 2>/dev/null; then
+    mkdir -p "$(dirname "${STABLE_ID_FILE}")"
+    tr -d '\n-' < /proc/sys/kernel/random/uuid > "${STABLE_ID_FILE}" || \
+        openssl rand -hex 16 > "${STABLE_ID_FILE}"
+    chown vscode:vscode "${STABLE_ID_FILE}" 2>/dev/null || true
+    chmod 444 "${STABLE_ID_FILE}"
+fi
+printf '%s\n' "$(cat "${STABLE_ID_FILE}")" > /etc/machine-id
+
+# ── nginx config — proxies to the mint-proxy, not VS Code directly ───────────
+cat > /etc/nginx/conf.d/vscode.conf << NGINX_CONF
+server {
+    listen ${SSL_PORT} ssl;
+    ssl_certificate     /etc/nginx/ssl/server.crt;
+    ssl_certificate_key /etc/nginx/ssl/server.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    location / {
+        proxy_pass         http://127.0.0.1:${PROXY_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade \$http_upgrade;
+        proxy_set_header   Connection "upgrade";
+        proxy_set_header   Host \$http_host;
+        proxy_read_timeout 86400;
+    }
+}
+NGINX_CONF
+
+GH_TOKEN=$(cat /home/vscode/.config/gh/hosts.yml 2>/dev/null | grep oauth_token | head -1 | sed "s/.*oauth_token: //" || echo "")
+
+echo "[startup-v2] Starting mint-proxy (127.0.0.1:${PROXY_PORT} → VS Code :${VSCODE_PORT})..."
+VSCODE_PORT="${VSCODE_PORT}" PROXY_PORT="${PROXY_PORT}" node /opt/mint-proxy.js &
+PROXY_PID=$!
+
+echo "[startup-v2] Starting nginx (TLS on :${SSL_PORT})..."
+nginx -g "daemon off;" &
+NGINX_PID=$!
+
+echo "[startup-v2] Starting VS Code Server (127.0.0.1:${VSCODE_PORT})..."
+cat > /tmp/vscode-launcher.sh << LAUNCHER
+#!/bin/bash
+export GITHUB_TOKEN='${GH_TOKEN}'
+eval "\$(dbus-launch --sh-syntax 2>/dev/null)" || true
+if command -v secret-tool &>/dev/null; then
+    EXISTING="\$(secret-tool lookup service GitHub account mutl3y 2>/dev/null || echo '')"
+    if [ -z "\${EXISTING}" ]; then
+        printf '%s' "\${GITHUB_TOKEN}" | secret-tool store --label='GitHub token' service 'GitHub' account 'mutl3y' 2>/dev/null || true
+    fi
+fi
+exec /usr/local/bin/code-server \
+    --host 127.0.0.1 \
+    --port ${VSCODE_PORT} \
+    --connection-token-file ${TOKEN_FILE} \
+    --accept-server-license-terms
+LAUNCHER
+chmod +x /tmp/vscode-launcher.sh
+su - vscode -c /tmp/vscode-launcher.sh &
+VSCODE_PID=$!
+
+echo ""
+echo "[startup-v2] ========================================================"
+echo "[startup-v2] HTTPS:     https://127.0.0.1:${SSL_PORT}/?tkn=${VSCODE_CONNECTION_TOKEN}"
+echo "[startup-v2] Workspace: ${WORKSPACE_DIR}"
+echo "[startup-v2] Proxy:     127.0.0.1:${PROXY_PORT} (mint-key + cookies)"
+echo "[startup-v2] ========================================================"
+echo ""
+
+wait -n $PROXY_PID $NGINX_PID $VSCODE_PID
+echo "[startup-v2] A process exited - shutting down"
+kill $PROXY_PID $NGINX_PID $VSCODE_PID 2>/dev/null || true
+STARTUP_V2
+
+RUN chmod +x /opt/init/startup-ssl-v2.sh
+
+EXPOSE 8444
+
+ENTRYPOINT ["/opt/init/startup-ssl-v2.sh"]
