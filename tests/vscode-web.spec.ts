@@ -157,30 +157,6 @@ test.describe('VS Code Server Web — File Explorer', () => {
   });
 });
 
-// ── Terminal Tests ───────────────────────────────────────────────────────────
-
-// ── Terminal Tests ───────────────────────────────────────────────────────────
-// TODO: Terminal tests skipped — xterm.js renders via canvas; reading terminal
-// output requires navigating the xterm buffer API which needs further research.
-// See HANDOVER.md §4 and the reference suite (skills-review-and-polish) which
-// does not test terminal output either.
-
-test.describe('VS Code Server Web — Terminal', () => {
-  test.fixme('terminal can be opened via keyboard shortcut', async () => {
-    await page.keyboard.press('Control+B');
-    await page.waitForTimeout(300);
-    await page.keyboard.press('Control+`');
-  });
-
-  test.fixme('terminal executes a command', async () => {
-    // xterm renders via canvas — need xterm buffer API to read output
-  });
-
-  test.fixme('terminal uses bash shell', async () => {
-    // xterm renders via canvas — need xterm buffer API to read output
-  });
-});
-
 // ── Secret Storage Tests ─────────────────────────────────────────────────────
 
 test.describe('VS Code Server Web — Secret Storage', () => {
