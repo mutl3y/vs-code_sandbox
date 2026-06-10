@@ -80,16 +80,24 @@ RUN mkdir -p /workspace && \
     chmod 755 /workspace
 
 # ============================================================================
-# VS Code Settings Defaults
+# [COMMENTED OUT] VS Code Settings Defaults
 # ============================================================================
-RUN mkdir -p /opt/vscode-defaults
-COPY config/vscode-settings.json /opt/vscode-defaults/settings.json
+# WHY COMMENTED: workspace trust is a convenience setting, not a workaround.
+# If the latest VS Code handles this properly in container mode, it can be
+# removed. Retained for rollback reference.
+# ============================================================================
+# RUN mkdir -p /opt/vscode-defaults
+# COPY config/vscode-settings.json /opt/vscode-defaults/settings.json
 
 # ============================================================================
-# Mint Proxy (secret storage key-minting)
+# [COMMENTED OUT] Mint Proxy (secret storage key-minting)
 # ============================================================================
-RUN mkdir -p /opt/mint-proxy
-COPY scripts/mint-proxy.js /opt/mint-proxy.js
+# WHY COMMENTED: vscode >= 1.100+ now supports mint-proxy natively via the
+# ServerKeyedAESCrypto protocol. This custom proxy is no longer needed.
+# Retained for rollback reference.
+# ============================================================================
+# RUN mkdir -p /opt/mint-proxy
+# COPY scripts/mint-proxy.js /opt/mint-proxy.js
 
 # ============================================================================
 # VS Code Server Web (Microsoft official binary)
@@ -100,13 +108,23 @@ RUN curl -fsSL "https://update.code.visualstudio.com/latest/server-linux-x64-web
     && tar -xzf /tmp/vscode-server.tar.gz -C /opt/vscode-server --strip-components=1 \
     && rm /tmp/vscode-server.tar.gz \
     && ln -s /opt/vscode-server/bin/code-server /usr/local/bin/code-server \
-    && chown -R vscode:vscode /opt/vscode-server \
-    # Patch getCwdResource in workbench.js: catch ENOPRO when file:// provider
-    # is missing in VS Code web server mode (no local FS in browser context).
-    # Without this, Copilot agent terminal tool fails with ENOPRO on every call.
-    && sed -i \
-        's|async getCwdResource(){let e=this.capabilities.get(0)?.getCwd();if(!e)return;let t;if(this.remoteAuthority?t=await this._pathService.fileURI(e):t=N.file(e),await this._fileService.exists(t))return t}|async getCwdResource(){let e=this.capabilities.get(0)?.getCwd();if(!e)return;let t;try{if(this.remoteAuthority?t=await this._pathService.fileURI(e):t=N.file(e),await this._fileService.exists(t))return t}catch(r){return}}|' \
-        /opt/vscode-server/out/vs/code/browser/workbench/workbench.js
+    && chown -R vscode:vscode /opt/vscode-server
+    # =========================================================================
+    # [COMMENTED OUT] Patch getCwdResource in both bundles: catch ENOPRO when
+    # file:// provider is missing in VS Code web server mode (no local FS in
+    # browser context). Without this, Copilot agent terminal tool fails with
+    # ENOPRO on every call.
+    # workbench.js        = browser-side bundle (served to the browser client)
+    # workbench.web.main.internal.js = server-side bundle (used by agentHost)
+    #
+    # WHY COMMENTED: vscode >= 1.100+ now uses vscode:/// URIs instead of
+    # file:// URIs, which resolves the ENOPRO issue natively. This sed patch
+    # is no longer needed. Retained for rollback reference.
+    # =========================================================================
+    # && sed -i \
+    #     's|async getCwdResource(){let e=this.capabilities.get(0)?.getCwd();if(!e)return;let t;if(this.remoteAuthority?t=await this._pathService.fileURI(e):t=N.file(e),await this._fileService.exists(t))return t}|async getCwdResource(){let e=this.capabilities.get(0)?.getCwd();if(!e)return;let t;try{if(this.remoteAuthority?t=await this._pathService.fileURI(e):t=N.file(e),await this._fileService.exists(t))return t}catch(r){return}}|' \
+    #     /opt/vscode-server/out/vs/code/browser/workbench/workbench.js \
+    #     /opt/vscode-server/out/vs/workbench/workbench.web.main.internal.js
 
 # ============================================================================
 # Startup Script — HTTPS with mint-proxy
@@ -130,18 +148,20 @@ chown -R vscode:vscode /home/vscode/.vscode-server/data 2>/dev/null || true
 chown -R vscode:vscode /home/vscode/.config 2>/dev/null || true
 chown -R vscode:vscode /home/vscode/.token-store 2>/dev/null || true
 
-# ── First-run initialisation (also repairs corrupted settings) ────────────────
-DATA_DIR="/home/vscode/.vscode-server/data"
-for SCOPE in Machine User; do
-    TARGET="${DATA_DIR}/${SCOPE}/settings.json"
-    mkdir -p "$(dirname "${TARGET}")"
-    # Write defaults if missing OR if file is not valid JSON
-    if [ ! -f "${TARGET}" ] || ! python3 -c "import json,sys; json.load(open('${TARGET}'))" 2>/dev/null; then
-        echo "[startup] Writing ${SCOPE}/settings.json (missing or invalid JSON)"
-        cp /opt/vscode-defaults/settings.json "${TARGET}"
-    fi
-    chown vscode:vscode "${TARGET}"
-done
+# ── [COMMENTED OUT] First-run initialisation (settings defaults) ─────────────
+# WHY COMMENTED: Custom workspace-trust settings are no longer needed if
+# latest VS Code handles container mode properly. Retained for rollback.
+# DATA_DIR="/home/vscode/.vscode-server/data"
+# for SCOPE in Machine User; do
+#     TARGET="${DATA_DIR}/${SCOPE}/settings.json"
+#     mkdir -p "$(dirname "${TARGET}")"
+#     # Write defaults if missing OR if file is not valid JSON
+#     if [ ! -f "${TARGET}" ] || ! python3 -c "import json,sys; json.load(open('${TARGET}'))" 2>/dev/null; then
+#         echo "[startup] Writing ${SCOPE}/settings.json (missing or invalid JSON)"
+#         cp /opt/vscode-defaults/settings.json "${TARGET}"
+#     fi
+#     chown vscode:vscode "${TARGET}"
+# done
 
 # ── Git credential config ────────────────────────────────────────────────────
 if [ -f /home/vscode/.git-credentials ]; then
@@ -198,7 +218,11 @@ if [ ! -s "${STABLE_ID_FILE}" ] || ! grep -Eq '^[a-f0-9]{32}$' "${STABLE_ID_FILE
 fi
 printf '%s\n' "$(cat "${STABLE_ID_FILE}")" > /etc/machine-id
 
-# ── nginx config — proxies to the mint-proxy, not VS Code directly ───────────
+# ── nginx config — proxies directly to VS Code ──────────────────────────────
+# [NOTE] Mint-proxy removed — nginx now proxies directly to VS Code.
+# The PROXY_PORT env var is still accepted for backward compat but unused.
+# If mint-proxy is needed again, restore the proxy_pass to ${PROXY_PORT}
+# and re-enable the mint-proxy startup below.
 cat > /etc/nginx/conf.d/vscode.conf << NGINX_CONF
 server {
     listen ${HTTP_PORT};
@@ -213,7 +237,7 @@ server {
     ssl_ciphers         HIGH:!aNULL:!MD5;
 
     location / {
-        proxy_pass         http://127.0.0.1:${PROXY_PORT};
+        proxy_pass         http://127.0.0.1:${VSCODE_PORT};
         proxy_http_version 1.1;
         proxy_set_header   Upgrade \$http_upgrade;
         proxy_set_header   Connection "upgrade";
@@ -225,9 +249,10 @@ NGINX_CONF
 
 GH_TOKEN=$(cat /home/vscode/.config/gh/hosts.yml 2>/dev/null | grep oauth_token | head -1 | sed "s/.*oauth_token: //" || echo "")
 
-echo "[startup] Starting mint-proxy (127.0.0.1:${PROXY_PORT} → VS Code :${VSCODE_PORT})..."
-VSCODE_PORT="${VSCODE_PORT}" PROXY_PORT="${PROXY_PORT}" node /opt/mint-proxy.js &
-PROXY_PID=$!
+# [COMMENTED OUT] Starting mint-proxy — no longer needed
+# echo "[startup] Starting mint-proxy (127.0.0.1:${PROXY_PORT} → VS Code :${VSCODE_PORT})..."
+# VSCODE_PORT="${VSCODE_PORT}" PROXY_PORT="${PROXY_PORT}" node /opt/mint-proxy.js &
+# PROXY_PID=$!
 
 echo "[startup] Starting nginx (HTTP redirect :${HTTP_PORT} → HTTPS :${SSL_PORT})..."
 nginx -g "daemon off;" &
@@ -259,13 +284,15 @@ echo ""
 echo "[startup-v2] ========================================================"
 echo "[startup-v2] HTTPS:     https://127.0.0.1:${SSL_PORT}/?tkn=${VSCODE_CONNECTION_TOKEN}"
 echo "[startup-v2] Workspace: ${WORKSPACE_DIR}"
-echo "[startup-v2] Proxy:     127.0.0.1:${PROXY_PORT} (mint-key + cookies)"
+# [NOTE] Mint-proxy removed — nginx proxies directly to VS Code
+# echo "[startup-v2] Proxy:     127.0.0.1:${PROXY_PORT} (mint-key + cookies)"
 echo "[startup-v2] ========================================================"
 echo ""
 
-wait -n $PROXY_PID $NGINX_PID $VSCODE_PID
+# [NOTE] PROXY_PID removed — mint-proxy not running
+wait -n $NGINX_PID $VSCODE_PID
 echo "[startup-v2] A process exited - shutting down"
-kill $PROXY_PID $NGINX_PID $VSCODE_PID 2>/dev/null || true
+kill $NGINX_PID $VSCODE_PID 2>/dev/null || true
 STARTUP_HTTPS
 
 RUN chmod +x /opt/init/startup.sh
