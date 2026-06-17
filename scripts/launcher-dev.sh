@@ -87,6 +87,22 @@ build_image() {
     print_success "Image built: vscode-agent:dev"
 }
 
+promote_image() {
+    if ! $CONTAINER_CMD image inspect vscode-agent:dev &>/dev/null; then
+        print_error "No dev image found. Run: $0 build"
+        exit 1
+    fi
+
+    print_header "Promoting Dev Image → Production Tags"
+    $CONTAINER_CMD tag vscode-agent:dev vscode-agent:default
+    $CONTAINER_CMD tag vscode-agent:dev vscode-agent:stable
+    $CONTAINER_CMD tag vscode-agent:dev vscode-agent:ssl-v2
+    $CONTAINER_CMD tag vscode-agent:dev vscode-agent:latest
+    print_success "Promoted vscode-agent:dev → default, stable, ssl-v2, latest"
+    print_info "Production containers can now use the updated image"
+    print_info "Run './scripts/launcher.sh update <n>' to apply to a production session"
+}
+
 create_session() {
     local session_num=$1 workspace_path=$2 cert_dir=${3:-${CA_DIR}}
 
@@ -183,6 +199,39 @@ stop_session() {
     $CONTAINER_CMD stop "${container_name}" 2>/dev/null && print_success "Stopped" || print_error "Failed"
 }
 
+update_session() {
+    local session_num=${1:?Usage: $0 update <session_number>}
+    [[ "$session_num" -lt 1 || "$session_num" -gt 3 ]] && { print_error "Session must be 1-3"; exit 1; }
+
+    local container_name="vscode-dev-${session_num}"
+
+    # Get workspace path from the running or stopped container
+    local workspace_path=""
+    workspace_path=$($CONTAINER_CMD inspect "${container_name}" --format '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || echo "")
+
+    if [[ -z "$workspace_path" ]]; then
+        print_error "Could not determine workspace path for session ${session_num}"
+        print_info "Usage: $0 update <session_number> [workspace_path]"
+        return 1
+    fi
+
+    print_header "Updating Dev Session ${session_num}"
+    print_info "Workspace: ${workspace_path}"
+    print_info "Stopping container..."
+    $CONTAINER_CMD stop "${container_name}" 2>/dev/null || true
+
+    print_info "Removing container (volumes preserved)..."
+    $CONTAINER_CMD rm -f "${container_name}" 2>/dev/null || true
+
+    print_info "Rebuilding image..."
+    build_image
+
+    print_info "Recreating session with new image..."
+    create_session "$session_num" "$workspace_path"
+
+    print_success "Dev Session ${session_num} updated with latest image"
+}
+
 remove_session() {
     local session_num=${1:?Usage: $0 remove <session_number>}
     local container_name="vscode-dev-${session_num}"
@@ -223,8 +272,10 @@ QUICK START:
   3. Access:             https://127.0.0.1:8560/?tkn=<token>&folder=/workspace
 
 COMMANDS:
-  build                     Build vscode-agent:dev (no mint-proxy, no patches)
+  build                     Build vscode-agent:dev
   create  <n> <path> [certs]  Create HTTPS session (n=1-3)
+  update  <n>               Update session image (preserves extensions/settings)
+  promote                   Promote dev image → production tags (default, stable, ssl-v2, latest)
   list                      List active dev sessions
   token   <n>               Print access URL for dev session n
   stop    <n>               Stop dev session
@@ -234,9 +285,7 @@ COMMANDS:
 DEFAULT DEV PORTS:  8560 (session 1)  |  8561 (session 2)  |  8562 (session 3)
 
 WHAT'S DIFFERENT FROM PRODUCTION:
-  ✓ No mint-proxy (vscode handles ServerKeyedAESCrypto natively)
-  ✓ No sed patches on getCwdResource (vscode:/// URIs natively)
-  ✓ No workspace-trust override settings
+  ✓ Same Dockerfile as production (mint-proxy, workspace trust, crash recovery)
   ✓ All containers, volumes, and ports fully isolated from production
 
 EOF
@@ -266,6 +315,13 @@ main() {
         stop)
             [[ $# -lt 1 ]] && { print_error "Usage: $0 stop <session_number>"; exit 1; }
             stop_session "$1"
+            ;;
+        update)
+            [[ $# -lt 1 ]] && { print_error "Usage: $0 update <session_number>"; exit 1; }
+            update_session "$1"
+            ;;
+        promote)
+            promote_image
             ;;
         remove)
             [[ $# -lt 1 ]] && { print_error "Usage: $0 remove <session_number>"; exit 1; }

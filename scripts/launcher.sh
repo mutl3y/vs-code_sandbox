@@ -208,6 +208,36 @@ stop_session() {
     podman stop "${container_name}" 2>/dev/null && print_success "Stopped" || print_error "Failed"
 }
 
+update_session() {
+    local session_num=${1:?Usage: $0 update <session_number>}
+    [[ "$session_num" -lt 1 || "$session_num" -gt 3 ]] && { print_error "Session must be 1-3"; exit 1; }
+
+    local container_name="vscode-ssl-v2-${session_num}"
+
+    # Get workspace path from the running or stopped container
+    local workspace_path=""
+    workspace_path=$(podman inspect "${container_name}" --format '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || echo "")
+
+    if [[ -z "$workspace_path" ]]; then
+        print_error "Could not determine workspace path for session ${session_num}"
+        print_info "Usage: $0 update <session_number> [workspace_path]"
+        return 1
+    fi
+
+    print_header "Updating Session ${session_num}"
+    print_info "Workspace: ${workspace_path}"
+    print_info "Stopping container..."
+    podman stop "${container_name}" 2>/dev/null || true
+
+    print_info "Removing container (volumes preserved)..."
+    podman rm -f "${container_name}" 2>/dev/null || true
+
+    print_info "Recreating session with latest image..."
+    create_session "$session_num" "$workspace_path"
+
+    print_success "Session ${session_num} updated with latest image"
+}
+
 show_usage() {
     cat << 'EOF'
 ╔════════════════════════════════════════════════════════════╗
@@ -223,11 +253,17 @@ QUICK START:
 COMMANDS:
   build                          Build image (Microsoft official + mint-proxy)
   create  <n> <path> [certs]    Create HTTPS session (n=1-3, path=/workspace)
+  update  <n>                    Update session image (preserves extensions/settings)
   list                           List active sessions with URLs
   token   <n>                    Print access URL for session n
   stop    <n>                    Stop session (volumes preserved)
   remove  <n>                    Remove container (volumes preserved)
   purge   <n>                    Remove container AND all volumes (clean slate)
+
+WORKFLOW (test with dev, deploy to production):
+  1. ./scripts/launcher-dev.sh build     # build + test with dev session
+  2. ./scripts/launcher-dev.sh promote   # tag dev image as production
+  3. ./scripts/launcher.sh update <n>    # apply to production session
 
 DEFAULT PORTS:  8550 (session 1)  |  8551 (session 2)  |  8552 (session 3)
 
@@ -265,6 +301,10 @@ main() {
         stop)
             [[ $# -lt 1 ]] && { print_error "Usage: $0 stop <session_number>"; exit 1; }
             stop_session "$1"
+            ;;
+        update)
+            [[ $# -lt 1 ]] && { print_error "Usage: $0 update <session_number>"; exit 1; }
+            update_session "$1"
             ;;
         remove)
             [[ $# -lt 1 ]] && { print_error "Usage: $0 remove <session_number>"; exit 1; }
