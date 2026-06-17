@@ -17,7 +17,8 @@ worktrees-*/.git/*
 node_modules/
 
 # VS Code
-.vscode/
+.vscode/*
+!.vscode/settings.json
 *.code-workspace
 .history/
 
@@ -65,6 +66,10 @@ docs/.doctrees/
 # Test coverage
 coverage/
 .coverage
+
+# Playwright test artifacts
+test-results/
+tests/report/
 
 # Local development overrides
 local.mk
