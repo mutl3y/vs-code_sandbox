@@ -206,7 +206,11 @@ chown vscode:vscode "${TOKEN_FILE}"
 chmod 600 "${TOKEN_FILE}"
 
 # ── Stable machine ID ────────────────────────────────────────────────────────
-STABLE_ID_FILE="/home/vscode/.vscode-server/data/stable-machine-id"
+# Stored in the shared token-store volume so all sessions use the same machine
+# ID. This avoids Copilot and other extensions treating each session as a
+# different machine (requiring re-authentication).
+SHARED_TOKEN_DIR="/home/vscode/.token-store"
+STABLE_ID_FILE="${SHARED_TOKEN_DIR}/stable-machine-id"
 if [ ! -s "${STABLE_ID_FILE}" ] || ! grep -Eq '^[a-f0-9]{32}$' "${STABLE_ID_FILE}" 2>/dev/null; then
     mkdir -p "$(dirname "${STABLE_ID_FILE}")"
     tr -d '\n-' < /proc/sys/kernel/random/uuid > "${STABLE_ID_FILE}" || \
