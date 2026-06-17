@@ -79,7 +79,11 @@ Without mint-proxy, secrets are stored in-memory only and lost on page refresh.
 | bind: workspace path | `/workspace` | Per session | Always (host dir) |
 | bind: `~/.config/gh` | `/home/vscode/.config/gh-host` | Read-only | Always |
 
-The shared token volume means all sessions use the same `?tkn=` value — only the port differs.
+The shared token volume stores:
+- **Connection token** — all sessions use the same `?tkn=` value (only the port differs)
+- **Stable machine ID** (`stable-machine-id`) — all sessions share the same machine ID, so Copilot and other extensions don't treat each session as a different machine
+
+The shared machine ID is generated once on first startup and stored in the token volume. All sessions read it and write it to `/etc/machine-id`. This means Copilot and other extensions that key on machine ID will stay authenticated across sessions.
 
 ## Startup Sequence
 
@@ -121,6 +125,38 @@ VS Code validates token → sets auth cookie → 302 → /
 All subsequent requests use cookie (no token in URL after first load)
     ↓
 Extension secrets use ServerKeyedAESCrypto (via mint-proxy cookies) → persisted in gnome-keyring
+```
+
+## Launcher: Single Script with `dev` Subcommand
+
+All session management uses one script (`scripts/launcher.sh`) with a `dev` subcommand for isolated testing:
+
+| Command | Production | Dev (`dev` prefix) |
+|---------|-----------|-------------------|
+| Build | `./scripts/launcher.sh build` | `./scripts/launcher.sh dev build` |
+| Create | `./scripts/launcher.sh create 1 /path` | `./scripts/launcher.sh dev create 1 /path` |
+| Update | `./scripts/launcher.sh update 1` (recreate only) | `./scripts/launcher.sh dev update 1` (rebuild + recreate) |
+| Promote | — | `./scripts/launcher.sh dev promote` |
+| List/Token/Stop/Remove/Purge | Same pattern | Same pattern with `dev` prefix |
+
+Dev mode uses isolated resources:
+
+| Resource | Production | Dev |
+|----------|-----------|-----|
+| Containers | `vscode-ssl-v2-{1,2,3}` | `vscode-dev-{1,2,3}` |
+| HTTPS ports | 8550-8552 | 8560-8562 |
+| Volumes | `vscode-ssl-v2-*` | `vscode-dev-*` |
+| Image | `vscode-agent:default` | `vscode-agent:dev` |
+
+`scripts/launcher-dev.sh` is retained as a thin wrapper (`exec launcher.sh dev "$@"`) for backward compatibility.
+
+**Workflow:** build with dev → test → promote → apply to production:
+```bash
+./scripts/launcher.sh dev build
+./scripts/launcher.sh dev create 1 /path
+# test in browser at https://host:8560/...
+./scripts/launcher.sh dev promote
+./scripts/launcher.sh update 1
 ```
 
 ## Networking: Why `--network=host`

@@ -42,10 +42,25 @@ bash ca/gen-cert.sh ca/ vscode-server
 ```bash
 ./scripts/launcher.sh list              # all running sessions + URLs
 ./scripts/launcher.sh token 1           # URL for session 1
+./scripts/launcher.sh update 1          # update session (preserve extensions/settings)
 ./scripts/launcher.sh stop 1            # stop (volumes kept)
 ./scripts/launcher.sh remove 1          # remove container (volumes kept)
 ./scripts/launcher.sh purge 1           # remove container + all volumes
 ```
+
+## Dev Mode (Test Before Deploy)
+
+```bash
+# Build and test with isolated dev session
+./scripts/launcher.sh dev build
+./scripts/launcher.sh dev create 1 /path/to/project
+
+# When satisfied, promote to production and apply
+./scripts/launcher.sh dev promote
+./scripts/launcher.sh update 1
+```
+
+Dev mode uses isolated containers (`vscode-dev-*`), ports (8560-8562), and volumes (`vscode-dev-*`). Workflow: **build with dev → promote → apply to production**.
 
 ## Ports
 

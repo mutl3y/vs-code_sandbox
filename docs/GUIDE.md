@@ -239,6 +239,28 @@ Common issues: port already in use (`ss -tlnp | grep 8550`), certs missing (`ca/
 
 ---
 
+## Testing with Dev Mode
+
+You can test new Dockerfile changes in an isolated dev environment without touching your production sessions:
+
+```bash
+# Build and test with dev
+./scripts/launcher.sh dev build
+./scripts/launcher.sh dev create 1 /path/to/project
+
+# Test at https://192.168.x.x:8560/?tkn=<token>&folder=/workspace
+
+# When satisfied, promote to production
+./scripts/launcher.sh dev promote
+
+# Apply to production session (preserves extensions and settings)
+./scripts/launcher.sh update 1
+```
+
+Dev mode uses isolated container names (`vscode-dev-*`), ports (8560-8562), and volumes (`vscode-dev-*`) so it never collides with production sessions. The workflow is: **build with dev → promote → apply to production**.
+
+---
+
 ## Clearing Browser Cache (IndexedDB)
 
 VS Code stores provider configs (like OpenRouter API keys) in your browser's IndexedDB. If you see stale entries or "previous config" warnings when adding a model provider, clear the IndexedDB:
