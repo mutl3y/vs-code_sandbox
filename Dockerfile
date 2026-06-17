@@ -276,6 +276,32 @@ chmod +x /tmp/vscode-launcher.sh
 su - vscode -c /tmp/vscode-launcher.sh &
 VSCODE_PID=$!
 
+# VS Code restart loop — restart on crash instead of killing the container
+VSCodeRestart() {
+    local restart=0
+    while true; do
+        if [ "$restart" -gt 0 ]; then
+            echo "[startup-v2] VS Code crashed — restarting (attempt ${restart})..."
+            sleep 2
+        fi
+        su - vscode -c /tmp/vscode-launcher.sh &
+        VSCODE_PID=$!
+        wait $VSCODE_PID
+        local exit_code=$?
+        echo "[startup-v2] VS Code exited with code ${exit_code}"
+        restart=$((restart + 1))
+        # If nginx or mint-proxy died, we can't recover — bail
+        if ! kill -0 $NGINX_PID 2>/dev/null; then
+            echo "[startup-v2] nginx is dead — shutting down"
+            break
+        fi
+        if ! kill -0 $PROXY_PID 2>/dev/null; then
+            echo "[startup-v2] mint-proxy is dead — shutting down"
+            break
+        fi
+    done
+}
+
 echo ""
 echo "[startup-v2] ========================================================"
 echo "[startup-v2] HTTPS:     https://127.0.0.1:${SSL_PORT}/?tkn=${VSCODE_CONNECTION_TOKEN}"
@@ -284,9 +310,12 @@ echo "[startup-v2] Proxy:     127.0.0.1:${PROXY_PORT} (mint-key + cookies)"
 echo "[startup-v2] ========================================================"
 echo ""
 
-wait -n $PROXY_PID $NGINX_PID $VSCODE_PID
+VSCodeRestart &
+RESTART_PID=$!
+
+wait -n $PROXY_PID $NGINX_PID $RESTART_PID
 echo "[startup-v2] A process exited - shutting down"
-kill $PROXY_PID $NGINX_PID $VSCODE_PID 2>/dev/null || true
+kill $PROXY_PID $NGINX_PID $RESTART_PID 2>/dev/null || true
 STARTUP_HTTPS
 
 RUN chmod +x /opt/init/startup.sh
