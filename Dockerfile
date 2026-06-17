@@ -90,14 +90,15 @@ RUN mkdir -p /workspace && \
 # COPY config/vscode-settings.json /opt/vscode-defaults/settings.json
 
 # ============================================================================
-# [COMMENTED OUT] Mint Proxy (secret storage key-minting)
+# Mint Proxy (secret storage key-minting)
 # ============================================================================
-# WHY COMMENTED: vscode >= 1.100+ now supports mint-proxy natively via the
-# ServerKeyedAESCrypto protocol. This custom proxy is no longer needed.
-# Retained for rollback reference.
+# VS Code Server (server-linux-x64-web) never sets the vscode-secret-key-path
+# cookie, so the browser workbench falls back to in-memory secret storage.
+# This proxy sets the two required cookies and handles POST /_vscode-server/mint-key,
+# enabling ServerKeyedAESCrypto so secrets are encrypted and persisted.
 # ============================================================================
-# RUN mkdir -p /opt/mint-proxy
-# COPY scripts/mint-proxy.js /opt/mint-proxy.js
+RUN mkdir -p /opt/mint-proxy
+COPY scripts/mint-proxy.js /opt/mint-proxy.js
 
 # ============================================================================
 # VS Code Server Web (Microsoft official binary)
@@ -218,11 +219,7 @@ if [ ! -s "${STABLE_ID_FILE}" ] || ! grep -Eq '^[a-f0-9]{32}$' "${STABLE_ID_FILE
 fi
 printf '%s\n' "$(cat "${STABLE_ID_FILE}")" > /etc/machine-id
 
-# ── nginx config — proxies directly to VS Code ──────────────────────────────
-# [NOTE] Mint-proxy removed — nginx now proxies directly to VS Code.
-# The PROXY_PORT env var is still accepted for backward compat but unused.
-# If mint-proxy is needed again, restore the proxy_pass to ${PROXY_PORT}
-# and re-enable the mint-proxy startup below.
+# ── nginx config — proxies through mint-proxy to VS Code ─────────────────────
 cat > /etc/nginx/conf.d/vscode.conf << NGINX_CONF
 server {
     listen ${HTTP_PORT};
@@ -237,7 +234,7 @@ server {
     ssl_ciphers         HIGH:!aNULL:!MD5;
 
     location / {
-        proxy_pass         http://127.0.0.1:${VSCODE_PORT};
+        proxy_pass         http://127.0.0.1:${PROXY_PORT};
         proxy_http_version 1.1;
         proxy_set_header   Upgrade \$http_upgrade;
         proxy_set_header   Connection "upgrade";
@@ -249,10 +246,9 @@ NGINX_CONF
 
 GH_TOKEN=$(cat /home/vscode/.config/gh/hosts.yml 2>/dev/null | grep oauth_token | head -1 | sed "s/.*oauth_token: //" || echo "")
 
-# [COMMENTED OUT] Starting mint-proxy — no longer needed
-# echo "[startup] Starting mint-proxy (127.0.0.1:${PROXY_PORT} → VS Code :${VSCODE_PORT})..."
-# VSCODE_PORT="${VSCODE_PORT}" PROXY_PORT="${PROXY_PORT}" node /opt/mint-proxy.js &
-# PROXY_PID=$!
+echo "[startup] Starting mint-proxy (127.0.0.1:${PROXY_PORT} → VS Code :${VSCODE_PORT})..."
+VSCODE_PORT="${VSCODE_PORT}" PROXY_PORT="${PROXY_PORT}" node /opt/mint-proxy.js &
+PROXY_PID=$!
 
 echo "[startup] Starting nginx (HTTP redirect :${HTTP_PORT} → HTTPS :${SSL_PORT})..."
 nginx -g "daemon off;" &
@@ -284,15 +280,13 @@ echo ""
 echo "[startup-v2] ========================================================"
 echo "[startup-v2] HTTPS:     https://127.0.0.1:${SSL_PORT}/?tkn=${VSCODE_CONNECTION_TOKEN}"
 echo "[startup-v2] Workspace: ${WORKSPACE_DIR}"
-# [NOTE] Mint-proxy removed — nginx proxies directly to VS Code
-# echo "[startup-v2] Proxy:     127.0.0.1:${PROXY_PORT} (mint-key + cookies)"
+echo "[startup-v2] Proxy:     127.0.0.1:${PROXY_PORT} (mint-key + cookies)"
 echo "[startup-v2] ========================================================"
 echo ""
 
-# [NOTE] PROXY_PID removed — mint-proxy not running
-wait -n $NGINX_PID $VSCODE_PID
+wait -n $PROXY_PID $NGINX_PID $VSCODE_PID
 echo "[startup-v2] A process exited - shutting down"
-kill $NGINX_PID $VSCODE_PID 2>/dev/null || true
+kill $PROXY_PID $NGINX_PID $VSCODE_PID 2>/dev/null || true
 STARTUP_HTTPS
 
 RUN chmod +x /opt/init/startup.sh

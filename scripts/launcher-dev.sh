@@ -96,6 +96,7 @@ create_session() {
     local ssl_port=$((DEV_BASE_PORT + session_num - 1))
     local http_port=$((ssl_port - 110))
     local vs_port=$((DEV_VSCODE_BASE_PORT + session_num - 1))
+    local proxy_port=$((vs_port + 100))
     local cert="${cert_dir}/server.crt" key="${cert_dir}/server.key"
 
     [[ -f "$cert" && -f "$key" ]] || { print_error "Certs not found: $cert / $key"; print_info "Generate with: bash ca/gen-cert.sh ca/ vscode-server"; exit 1; }
@@ -119,6 +120,7 @@ create_session() {
         -e SSL_PORT="${ssl_port}" \
         -e HTTP_PORT="${http_port}" \
         -e VSCODE_PORT="${vs_port}" \
+        -e PROXY_PORT="${proxy_port}" \
         -e WORKSPACE_DIR="/workspace" \
         -v "${cert}:/etc/nginx/ssl/server.crt:ro,z" \
         -v "${key}:/etc/nginx/ssl/server.key:ro,z" \

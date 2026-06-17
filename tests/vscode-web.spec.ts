@@ -79,16 +79,23 @@ test.beforeAll(async ({ browser }) => {
   context = await browser.newContext();
   page = await context.newPage();
 
-  // Read connection token from the running container via podman exec
+  // Read connection token — try filesystem first (works inside container),
+  // then fall back to podman exec (works from host)
   let token = process.env.VSCODE_TOKEN ?? '';
   if (!token) {
+    const tokenPath = process.env.VSCODE_TOKEN_FILE ?? '/home/vscode/.vscode-token';
     try {
-      token = execSync(
-        `podman exec ${CONTAINER} cat /home/vscode/.vscode-token`,
-        { encoding: 'utf8', timeout: 5000 }
-      ).trim();
+      token = readFileSync(tokenPath, 'utf8').trim();
     } catch {
-      console.warn(`[test] Could not read token from container ${CONTAINER}`);
+      // Not inside the container — try podman exec
+      try {
+        token = execSync(
+          `podman exec ${CONTAINER} cat /home/vscode/.vscode-token`,
+          { encoding: 'utf8', timeout: 5000 }
+        ).trim();
+      } catch {
+        console.warn(`[test] Could not read token (tried ${tokenPath} and podman exec ${CONTAINER})`);
+      }
     }
   }
 
