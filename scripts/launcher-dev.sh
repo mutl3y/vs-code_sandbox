@@ -178,12 +178,14 @@ token_session() {
 }
 
 stop_session() {
-    local container_name="vscode-dev-$1"
+    local session_num=${1:?Usage: $0 stop <session_number>}
+    local container_name="vscode-dev-${session_num}"
     $CONTAINER_CMD stop "${container_name}" 2>/dev/null && print_success "Stopped" || print_error "Failed"
 }
 
 remove_session() {
-    local session_num=$1 container_name="vscode-dev-${session_num}"
+    local session_num=${1:?Usage: $0 remove <session_number>}
+    local container_name="vscode-dev-${session_num}"
     print_warning "Remove dev container ${container_name}? (volumes preserved)"
     read -p "(y/N) " -n 1 -r && echo
     [[ ! $REPLY =~ ^[Yy]$ ]] && { print_info "Cancelled"; return; }

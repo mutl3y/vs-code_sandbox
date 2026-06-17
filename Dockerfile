@@ -80,14 +80,13 @@ RUN mkdir -p /workspace && \
     chmod 755 /workspace
 
 # ============================================================================
-# [COMMENTED OUT] VS Code Settings Defaults
+# VS Code Settings Defaults
 # ============================================================================
-# WHY COMMENTED: workspace trust is a convenience setting, not a workaround.
-# If the latest VS Code handles this properly in container mode, it can be
-# removed. Retained for rollback reference.
+# Disables workspace trust prompts so first launch doesn't show a dialog
+# that blocks the UI until dismissed.
 # ============================================================================
-# RUN mkdir -p /opt/vscode-defaults
-# COPY config/vscode-settings.json /opt/vscode-defaults/settings.json
+RUN mkdir -p /opt/vscode-defaults
+COPY config/vscode-settings.json /opt/vscode-defaults/settings.json
 
 # ============================================================================
 # Mint Proxy (secret storage key-minting)
@@ -149,20 +148,18 @@ chown -R vscode:vscode /home/vscode/.vscode-server/data 2>/dev/null || true
 chown -R vscode:vscode /home/vscode/.config 2>/dev/null || true
 chown -R vscode:vscode /home/vscode/.token-store 2>/dev/null || true
 
-# ── [COMMENTED OUT] First-run initialisation (settings defaults) ─────────────
-# WHY COMMENTED: Custom workspace-trust settings are no longer needed if
-# latest VS Code handles container mode properly. Retained for rollback.
-# DATA_DIR="/home/vscode/.vscode-server/data"
-# for SCOPE in Machine User; do
-#     TARGET="${DATA_DIR}/${SCOPE}/settings.json"
-#     mkdir -p "$(dirname "${TARGET}")"
-#     # Write defaults if missing OR if file is not valid JSON
-#     if [ ! -f "${TARGET}" ] || ! python3 -c "import json,sys; json.load(open('${TARGET}'))" 2>/dev/null; then
-#         echo "[startup] Writing ${SCOPE}/settings.json (missing or invalid JSON)"
-#         cp /opt/vscode-defaults/settings.json "${TARGET}"
-#     fi
-#     chown vscode:vscode "${TARGET}"
-# done
+# ── First-run initialisation (workspace trust defaults) ──────────────────────
+DATA_DIR="/home/vscode/.vscode-server/data"
+for SCOPE in Machine User; do
+    TARGET="${DATA_DIR}/${SCOPE}/settings.json"
+    mkdir -p "$(dirname "${TARGET}")"
+    # Write defaults if missing OR if file is not valid JSON
+    if [ ! -f "${TARGET}" ] || ! python3 -c "import json,sys; json.load(open('${TARGET}'))" 2>/dev/null; then
+        echo "[startup] Writing ${SCOPE}/settings.json (missing or invalid JSON)"
+        cp /opt/vscode-defaults/settings.json "${TARGET}"
+    fi
+    chown vscode:vscode "${TARGET}"
+done
 
 # ── Git credential config ────────────────────────────────────────────────────
 if [ -f /home/vscode/.git-credentials ]; then
