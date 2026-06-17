@@ -191,7 +191,8 @@ remove_session() {
 }
 
 purge_session() {
-    local session_num=$1 container_name="vscode-dev-${session_num}"
+    local session_num=${1:?Usage: $0 purge <session_number>}
+    local container_name="vscode-dev-${session_num}"
     print_warning "PURGE dev session ${session_num}? Removes container AND all dev volumes."
     read -p "Type 'yes' to confirm: " -r && echo
     [[ "$REPLY" != "yes" ]] && { print_info "Cancelled"; return; }

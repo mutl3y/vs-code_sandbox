@@ -233,6 +233,26 @@ server {
     ssl_protocols       TLSv1.2 TLSv1.3;
     ssl_ciphers         HIGH:!aNULL:!MD5;
 
+    location /clear-cache {
+        default_type text/html;
+        return 200 '<!DOCTYPE html>
+<html><head><title>Clearing IndexedDB...</title></head>
+<body>
+<script>
+async function clearAndRedirect() {
+    const dbs = await indexedDB.databases();
+    for (const db of dbs) {
+        if (db.name) { indexedDB.deleteDatabase(db.name); }
+    }
+    document.getElementById(\"status\").textContent = \"Cleared! Redirecting...\";
+    setTimeout(() => { window.location.href = \"/?tkn=${VSCODE_CONNECTION_TOKEN}&folder=/workspace\"; }, 500);
+}
+clearAndRedirect();
+</script>
+<p id=\"status\">Clearing IndexedDB databases...</p>
+</body></html>';
+    }
+
     location / {
         proxy_pass         http://127.0.0.1:${PROXY_PORT};
         proxy_http_version 1.1;
