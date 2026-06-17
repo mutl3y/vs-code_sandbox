@@ -12,6 +12,9 @@ Microsoft VS Code Server running in Podman containers, accessible via browser ov
 ✅ Podman compatible  
 ✅ Mint-proxy for ServerKeyedAESCrypto secret encryption  
 ✅ GitHub CLI auth integration  
+✅ VS Code crash recovery (auto-restart on ECONNRESET)  
+✅ `/clear-cache` endpoint to wipe browser IndexedDB  
+✅ E2E test suite (9/9 passing)  
 
 ## Quick Start
 

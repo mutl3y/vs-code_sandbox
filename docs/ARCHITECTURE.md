@@ -99,11 +99,11 @@ The shared token volume means all sessions use the same `?tkn=` value — only t
       read /home/vscode/.vscode-server/data/stable-machine-id
       (ensures encrypted secrets survive container rebuilds)
 11. Write /etc/machine-id from stable ID
-12. Generate /etc/nginx/conf.d/vscode.conf (TLS on SSL_PORT, proxy to PROXY_PORT)
+12. Generate /etc/nginx/conf.d/vscode.conf (TLS on SSL_PORT, proxy to PROXY_PORT, /clear-cache endpoint)
 13. Start mint-proxy:  node /opt/mint-proxy.js (PROXY_PORT → VSCODE_PORT)
 14. Start nginx:       nginx -g "daemon off;" (SSL_PORT → PROXY_PORT)
-15. Start VS Code:     su - vscode → code-server --host 127.0.0.1 --port VSCODE_PORT
-16. Print access URL to container log
+15. Start VS Code:     VSCodeRestart() loop — restarts on crash, only bails if nginx/mint-proxy dies
+16. Print access URLs (including /clear-cache for IndexedDB wipe)
 17. wait -n: shut down all three if any one exits
 ```
 
@@ -150,6 +150,35 @@ Critical nginx proxy header:
 proxy_set_header Host $http_host;   # preserves port number
 # NOT $host — that strips the port, breaking VS Code WebSocket URL construction
 ```
+
+## Crash Recovery (VSCodeRestart Loop)
+
+VS Code Server can crash with `ECONNRESET` when the browser drops a connection mid-operation (e.g. adding workspace folders). Previously this killed the entire container via `wait -n`.
+
+The `VSCodeRestart()` function in the startup script handles this:
+
+1. Runs VS Code in a `while true` loop
+2. On crash: logs the exit code, waits 2 seconds, restarts VS Code
+3. On each iteration: checks if nginx and mint-proxy are still alive
+4. Only exits the loop (and shuts down the container) if nginx or mint-proxy dies
+
+This means transient VS Code crashes (like ECONNRESET) are automatically recovered from without losing the session.
+
+## /clear-cache Endpoint
+
+VS Code Web stores provider metadata (model providers, extensions, settings) in the browser's IndexedDB (`vscode-web-db` → `vscode-userdata-store`). Stale entries can persist across container rebuilds because they live in the browser, not the server.
+
+The `/clear-cache` nginx endpoint serves an HTML page that:
+1. Enumerates all IndexedDB databases via `indexedDB.databases()`
+2. Deletes each one via `indexedDB.deleteDatabase(name)`
+3. Redirects to VS Code with the connection token
+
+Usage: `https://<host>:<port>/clear-cache`
+
+This is useful when:
+- Stale OpenRouter/custom provider registrations appear
+- After container rebuilds with different tokens
+- When extensions fail to initialize due to corrupted state
 
 ## Workspace Permissions: `--userns=keep-id`
 
