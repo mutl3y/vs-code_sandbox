@@ -9,7 +9,7 @@ This guide explains everything from scratch. No experience needed.
 Imagine VS Code — the code editor — running inside a little isolated box (called a **container**) on your computer. You open it in a **web browser** instead of installing it directly. This means:
 
 - Your code projects are safe inside the container
-- You can run up to **3 separate VS Code sessions** at once, each with its own project
+- You can run multiple **separate VS Code sessions** at once, each with its own project
 - It uses **HTTPS** (the padlock in your browser bar) so it's secure even on your local network
 - Extensions and settings survive when you stop and restart the container
 
