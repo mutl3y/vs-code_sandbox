@@ -33,6 +33,7 @@ VSCODE_BASE_PORT=9200
 # ── Shared constants ─────────────────────────────────────────────────────────
 PROXY_OFFSET=100
 MAX_SESSIONS=3
+PROFILE_NAME=""
 
 print_header() {
     local tag=""
@@ -107,8 +108,8 @@ promote_image() {
 }
 
 create_session() {
-    local session_num=${1:?Usage: $0 [dev] create <n> <workspace_path> [cert_dir]}
-    local workspace_path=${2:?Usage: $0 [dev] create <n> <workspace_path> [cert_dir]}
+    local session_num=${1:?Usage: $0 [dev] create <n> <workspace_path> [-p <profile>]}
+    local workspace_path=${2:?Usage: $0 [dev] create <n> <workspace_path> [-p <profile>]}
     local cert_dir=${3:-${CA_DIR}}
 
     [[ "$session_num" -lt 1 || "$session_num" -gt $MAX_SESSIONS ]] && { print_error "Session must be 1-${MAX_SESSIONS}"; exit 1; }
@@ -134,6 +135,18 @@ create_session() {
     print_info "Port: ${ssl_port} (HTTPS)  ${http_port} (HTTP→redirect)  |  Workspace: ${workspace_path}"
 
     local token_vol="${VOLUME_PREFIX}-token-shared"
+    local profile_mount_args=()
+    if [[ -n "$PROFILE_NAME" ]]; then
+        local profiles_dir="${PROJECT_DIR}/profiles"
+        local profile_path="${profiles_dir}/${PROFILE_NAME}"
+        if [[ ! -d "$profile_path" ]]; then
+            mkdir -p "$profile_path"
+            print_info "Created profile directory: profiles/${PROFILE_NAME}"
+        fi
+        profile_mount_args=(-v "${profile_path}:/home/vscode/.copilot:rw,z")
+        print_info "Profile: ${PROFILE_NAME} → /home/vscode/.copilot"
+    fi
+
     $CONTAINER_CMD run -d \
         --name "${cname}" \
         --network=host \
@@ -151,6 +164,7 @@ create_session() {
         -v "$(volume_name config "$session_num"):/home/vscode/.config:rw" \
         -v "${token_vol}:/home/vscode/.token-store:rw" \
         -v "${HOME}/.config/gh:/home/vscode/.config/gh-host:ro,z" \
+        "${profile_mount_args[@]}" \
         "${IMAGE_NAME}"
 
     print_info "Waiting for startup..."
@@ -222,6 +236,7 @@ update_session() {
 
     print_header "Updating Session ${session_num}"
     print_info "Workspace: ${workspace_path}"
+    [[ -n "$PROFILE_NAME" ]] && print_info "Profile: ${PROFILE_NAME}"
     print_info "Stopping container..."
     $CONTAINER_CMD stop "${cname}" 2>/dev/null || true
 
@@ -284,8 +299,8 @@ QUICK START:
 
 COMMANDS:
   build                    Build image
-  create  <n> <path>       Create session (n=1-3)
-  update  <n>              Update session (preserves extensions/settings)
+  create  <n> <path> [-p name]  Create session (n=1-3, optional profile)
+  update  <n> [-p name]         Update session (can switch profile)
   list                     List active sessions with URLs
   token   <n>              Print access URL for session n
   stop    <n>              Stop session (volumes preserved)
@@ -294,6 +309,11 @@ COMMANDS:
 
 EXTRA (dev only):
   dev promote              Promote dev image → production tags
+
+PROFILE (-p <name>):
+  Mounts profiles/<name> → /home/vscode/.copilot (read-write)
+  Directory is created if it doesn't exist.
+  Omit -p to leave ~/.copilot as-is (default behavior).
 
 PORTS: ${ports}
 
@@ -320,6 +340,24 @@ main() {
         VSCODE_BASE_PORT=9210
     fi
 
+    # Parse optional flags (-p <profile>)
+    PROFILE_NAME=""
+    local args=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|--profile)
+                [[ $# -lt 2 ]] && { print_error "Usage: $0 [dev] create/update <n> <path> [-p <profile>]"; exit 1; }
+                PROFILE_NAME="$2"
+                shift 2
+                ;;
+            *)
+                args+=("$1")
+                shift
+                ;;
+        esac
+    done
+    set -- "${args[@]}"
+
     [[ $# -eq 0 ]] && { show_usage; exit 1; }
 
     local command=$1; shift
@@ -329,7 +367,7 @@ main() {
             build_image
             ;;
         create)
-            [[ $# -lt 2 ]] && { print_error "Usage: $0 [dev] create <session_number> <workspace_path> [cert_dir]"; exit 1; }
+            [[ $# -lt 2 ]] && { print_error "Usage: $0 [dev] create <session_number> <workspace_path> [-p <profile>]"; exit 1; }
             create_session "$1" "$2" "${3:-}"
             ;;
         list)
