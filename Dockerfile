@@ -82,11 +82,19 @@ RUN mkdir -p /workspace && \
 # ============================================================================
 # VS Code Settings Defaults
 # ============================================================================
+# Disables workspace trust prompts so first launch doesn't show a dialog
+# that blocks the UI until dismissed.
+# ============================================================================
 RUN mkdir -p /opt/vscode-defaults
 COPY config/vscode-settings.json /opt/vscode-defaults/settings.json
 
 # ============================================================================
 # Mint Proxy (secret storage key-minting)
+# ============================================================================
+# VS Code Server (server-linux-x64-web) never sets the vscode-secret-key-path
+# cookie, so the browser workbench falls back to in-memory secret storage.
+# This proxy sets the two required cookies and handles POST /_vscode-server/mint-key,
+# enabling ServerKeyedAESCrypto so secrets are encrypted and persisted.
 # ============================================================================
 RUN mkdir -p /opt/mint-proxy
 COPY scripts/mint-proxy.js /opt/mint-proxy.js
@@ -100,13 +108,23 @@ RUN curl -fsSL "https://update.code.visualstudio.com/latest/server-linux-x64-web
     && tar -xzf /tmp/vscode-server.tar.gz -C /opt/vscode-server --strip-components=1 \
     && rm /tmp/vscode-server.tar.gz \
     && ln -s /opt/vscode-server/bin/code-server /usr/local/bin/code-server \
-    && chown -R vscode:vscode /opt/vscode-server \
-    # Patch getCwdResource in workbench.js: catch ENOPRO when file:// provider
-    # is missing in VS Code web server mode (no local FS in browser context).
-    # Without this, Copilot agent terminal tool fails with ENOPRO on every call.
-    && sed -i \
-        's|async getCwdResource(){let e=this.capabilities.get(0)?.getCwd();if(!e)return;let t;if(this.remoteAuthority?t=await this._pathService.fileURI(e):t=N.file(e),await this._fileService.exists(t))return t}|async getCwdResource(){let e=this.capabilities.get(0)?.getCwd();if(!e)return;let t;try{if(this.remoteAuthority?t=await this._pathService.fileURI(e):t=N.file(e),await this._fileService.exists(t))return t}catch(r){return}}|' \
-        /opt/vscode-server/out/vs/code/browser/workbench/workbench.js
+    && chown -R vscode:vscode /opt/vscode-server
+    # =========================================================================
+    # [COMMENTED OUT] Patch getCwdResource in both bundles: catch ENOPRO when
+    # file:// provider is missing in VS Code web server mode (no local FS in
+    # browser context). Without this, Copilot agent terminal tool fails with
+    # ENOPRO on every call.
+    # workbench.js        = browser-side bundle (served to the browser client)
+    # workbench.web.main.internal.js = server-side bundle (used by agentHost)
+    #
+    # WHY COMMENTED: vscode >= 1.100+ now uses vscode:/// URIs instead of
+    # file:// URIs, which resolves the ENOPRO issue natively. This sed patch
+    # is no longer needed. Retained for rollback reference.
+    # =========================================================================
+    # && sed -i \
+    #     's|async getCwdResource(){let e=this.capabilities.get(0)?.getCwd();if(!e)return;let t;if(this.remoteAuthority?t=await this._pathService.fileURI(e):t=N.file(e),await this._fileService.exists(t))return t}|async getCwdResource(){let e=this.capabilities.get(0)?.getCwd();if(!e)return;let t;try{if(this.remoteAuthority?t=await this._pathService.fileURI(e):t=N.file(e),await this._fileService.exists(t))return t}catch(r){return}}|' \
+    #     /opt/vscode-server/out/vs/code/browser/workbench/workbench.js \
+    #     /opt/vscode-server/out/vs/workbench/workbench.web.main.internal.js
 
 # ============================================================================
 # Startup Script — HTTPS with mint-proxy
@@ -130,7 +148,7 @@ chown -R vscode:vscode /home/vscode/.vscode-server/data 2>/dev/null || true
 chown -R vscode:vscode /home/vscode/.config 2>/dev/null || true
 chown -R vscode:vscode /home/vscode/.token-store 2>/dev/null || true
 
-# ── First-run initialisation (also repairs corrupted settings) ────────────────
+# ── First-run initialisation (workspace trust defaults) ──────────────────────
 DATA_DIR="/home/vscode/.vscode-server/data"
 for SCOPE in Machine User; do
     TARGET="${DATA_DIR}/${SCOPE}/settings.json"
@@ -188,7 +206,11 @@ chown vscode:vscode "${TOKEN_FILE}"
 chmod 600 "${TOKEN_FILE}"
 
 # ── Stable machine ID ────────────────────────────────────────────────────────
-STABLE_ID_FILE="/home/vscode/.vscode-server/data/stable-machine-id"
+# Stored in the shared token-store volume so all sessions use the same machine
+# ID. This avoids Copilot and other extensions treating each session as a
+# different machine (requiring re-authentication).
+SHARED_TOKEN_DIR="/home/vscode/.token-store"
+STABLE_ID_FILE="${SHARED_TOKEN_DIR}/stable-machine-id"
 if [ ! -s "${STABLE_ID_FILE}" ] || ! grep -Eq '^[a-f0-9]{32}$' "${STABLE_ID_FILE}" 2>/dev/null; then
     mkdir -p "$(dirname "${STABLE_ID_FILE}")"
     tr -d '\n-' < /proc/sys/kernel/random/uuid > "${STABLE_ID_FILE}" || \
@@ -198,7 +220,7 @@ if [ ! -s "${STABLE_ID_FILE}" ] || ! grep -Eq '^[a-f0-9]{32}$' "${STABLE_ID_FILE
 fi
 printf '%s\n' "$(cat "${STABLE_ID_FILE}")" > /etc/machine-id
 
-# ── nginx config — proxies to the mint-proxy, not VS Code directly ───────────
+# ── nginx config — proxies through mint-proxy to VS Code ─────────────────────
 cat > /etc/nginx/conf.d/vscode.conf << NGINX_CONF
 server {
     listen ${HTTP_PORT};
@@ -211,6 +233,26 @@ server {
     ssl_certificate_key /etc/nginx/ssl/server.key;
     ssl_protocols       TLSv1.2 TLSv1.3;
     ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    location /clear-cache {
+        default_type text/html;
+        return 200 '<!DOCTYPE html>
+<html><head><title>Clearing IndexedDB...</title></head>
+<body>
+<script>
+async function clearAndRedirect() {
+    const dbs = await indexedDB.databases();
+    for (const db of dbs) {
+        if (db.name) { indexedDB.deleteDatabase(db.name); }
+    }
+    document.getElementById(\"status\").textContent = \"Cleared! Redirecting...\";
+    setTimeout(() => { window.location.href = \"/?tkn=${VSCODE_CONNECTION_TOKEN}&folder=/workspace\"; }, 500);
+}
+clearAndRedirect();
+</script>
+<p id=\"status\">Clearing IndexedDB databases...</p>
+</body></html>';
+    }
 
     location / {
         proxy_pass         http://127.0.0.1:${PROXY_PORT};
@@ -255,6 +297,32 @@ chmod +x /tmp/vscode-launcher.sh
 su - vscode -c /tmp/vscode-launcher.sh &
 VSCODE_PID=$!
 
+# VS Code restart loop — restart on crash instead of killing the container
+VSCodeRestart() {
+    local restart=0
+    while true; do
+        if [ "$restart" -gt 0 ]; then
+            echo "[startup-v2] VS Code crashed — restarting (attempt ${restart})..."
+            sleep 2
+        fi
+        su - vscode -c /tmp/vscode-launcher.sh &
+        VSCODE_PID=$!
+        wait $VSCODE_PID
+        local exit_code=$?
+        echo "[startup-v2] VS Code exited with code ${exit_code}"
+        restart=$((restart + 1))
+        # If nginx or mint-proxy died, we can't recover — bail
+        if ! kill -0 $NGINX_PID 2>/dev/null; then
+            echo "[startup-v2] nginx is dead — shutting down"
+            break
+        fi
+        if ! kill -0 $PROXY_PID 2>/dev/null; then
+            echo "[startup-v2] mint-proxy is dead — shutting down"
+            break
+        fi
+    done
+}
+
 echo ""
 echo "[startup-v2] ========================================================"
 echo "[startup-v2] HTTPS:     https://127.0.0.1:${SSL_PORT}/?tkn=${VSCODE_CONNECTION_TOKEN}"
@@ -263,9 +331,12 @@ echo "[startup-v2] Proxy:     127.0.0.1:${PROXY_PORT} (mint-key + cookies)"
 echo "[startup-v2] ========================================================"
 echo ""
 
-wait -n $PROXY_PID $NGINX_PID $VSCODE_PID
+VSCodeRestart &
+RESTART_PID=$!
+
+wait -n $PROXY_PID $NGINX_PID $RESTART_PID
 echo "[startup-v2] A process exited - shutting down"
-kill $PROXY_PID $NGINX_PID $VSCODE_PID 2>/dev/null || true
+kill $PROXY_PID $NGINX_PID $RESTART_PID 2>/dev/null || true
 STARTUP_HTTPS
 
 RUN chmod +x /opt/init/startup.sh

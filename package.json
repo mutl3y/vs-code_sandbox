@@ -1,0 +1,22 @@
+{
+  "name": "vscode_in_container",
+  "version": "1.0.0",
+  "description": "Microsoft VS Code Server running in Podman containers, accessible via browser over HTTPS with connection-token authentication and mint-proxy encryption. Up to 3 parallel isolated sessions, each with a persistent workspace, extensions, and secret storage.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@playwright/test": "^1.60.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3"
+  }
+}
